@@ -103,7 +103,7 @@ export async function processBashCommand(inputString: string, precedingInputBloc
         stderr: ''
       }, randomUUID());
       if (typeof mapped.content === 'string') {
-        stdout = data.persistedOutputPath ? mapped.content : escapeXml(mapped.content);
+        stdout = mapped.content;
       }
     }
     return {

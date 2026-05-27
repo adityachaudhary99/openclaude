@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test'
+import { afterEach, beforeEach, expect, mock, test } from 'bun:test'
 import { getEmptyToolPermissionContext } from '../../Tool.js'
 import { BashTool } from '../../tools/BashTool/BashTool.js'
 import {
@@ -6,6 +6,18 @@ import {
   releaseSharedMutationLock,
 } from '../../test/sharedMutationLock.js'
 import { getContentText } from '../messages.js'
+
+// Force bash routing regardless of platform/env — processBashCommand
+// consults isPowerShellToolEnabled() and resolveDefaultShell() at the
+// top, and may route to PowerShellTool on Windows which defeats our
+// BashTool.call stub.  mock.module is process-global in bun, so this
+// must run BEFORE the import of processBashCommand.
+mock.module('../shell/shellToolUtils.js', () => ({
+  isPowerShellToolEnabled: mock(() => false),
+}))
+mock.module('../shell/resolveDefaultShell.js', () => ({
+  resolveDefaultShell: mock((): 'bash' | 'powershell' => 'bash'),
+}))
 import { processBashCommand } from './processBashCommand.js'
 
 const originalCall = BashTool.call
@@ -14,9 +26,17 @@ beforeEach(async () => {
   await acquireSharedMutationLock('utils/processUserInput/processBashCommand.test.tsx')
 })
 
-afterEach(() => {
+afterEach(async () => {
   try {
     BashTool.call = originalCall
+    const realPowerShell = await import('../shell/shellToolUtils.js')
+    const realShell = await import('../shell/resolveDefaultShell.js')
+    mock.module('../shell/shellToolUtils.js', () => ({
+      isPowerShellToolEnabled: realPowerShell.isPowerShellToolEnabled,
+    }))
+    mock.module('../shell/resolveDefaultShell.js', () => ({
+      resolveDefaultShell: realShell.resolveDefaultShell,
+    }))
   } finally {
     releaseSharedMutationLock()
   }
