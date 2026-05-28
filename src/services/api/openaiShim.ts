@@ -372,8 +372,27 @@ function convertToolResultContent(
   return parts
 }
 
+const VISION_SUPPORTING_MODEL_PREFIXES = [
+  'gpt-4', 'gpt-4o', 'gpt-4v',
+  'gemini', 'gemini-',
+  'claude-3', 'claude-3.',
+  'kimi', 'kimi-',
+  'qwen-vl', 'qwen2-vl',
+  'grok-vision',
+  'minimax-vl',
+  'xiaomi-mimo-vl',
+]
+
+function modelSupportsVision(modelName: string): boolean {
+  const normalized = modelName.toLowerCase().trim()
+  return VISION_SUPPORTING_MODEL_PREFIXES.some(prefix =>
+    normalized.startsWith(prefix.toLowerCase()),
+  )
+}
+
 function convertContentBlocks(
   content: unknown,
+  stripImages?: boolean,
 ): string | Array<{ type: string; text?: string; image_url?: { url: string } }> {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return String(content ?? '')
@@ -385,6 +404,10 @@ function convertContentBlocks(
         parts.push({ type: 'text', text: block.text ?? '' })
         break
       case 'image': {
+        if (stripImages) {
+          parts.push({ type: 'text', text: '[Image]' })
+          break
+        }
         const src = block.source
         if (src?.type === 'base64') {
           parts.push({
@@ -494,6 +517,7 @@ function convertMessages(
     preserveReasoningContent?: boolean
     reasoningContentFallback?: '' | 'omit'
     preserveGeminiThoughtSignature?: boolean
+    stripImages?: boolean
   },
 ): OpenAIMessage[] {
   const preserveReasoningContent = options?.preserveReasoningContent === true
@@ -567,13 +591,13 @@ function convertMessages(
         if (otherContent.length > 0) {
           result.push({
             role: 'user',
-            content: convertContentBlocks(otherContent),
+            content: convertContentBlocks(otherContent, options?.stripImages),
           })
         }
       } else {
         result.push({
           role: 'user',
-          content: convertContentBlocks(content),
+          content: convertContentBlocks(content, options?.stripImages),
         })
       }
     } else if (role === 'assistant') {
@@ -1785,6 +1809,7 @@ class OpenAIShimMessages {
       treatAsLocal: isLocalProviderUrl(request.baseUrl),
     })
     const shimConfig = runtimeShimContext.openaiShimConfig
+    const stripImages = !modelSupportsVision(request.resolvedModel)
     const openaiMessages = convertMessages(compressedMessages, params.system, {
       preserveReasoningContent: shimConfig.preserveReasoningContent,
       reasoningContentFallback: shimConfig.reasoningContentFallback,
@@ -1792,6 +1817,7 @@ class OpenAIShimMessages {
         request.resolvedModel,
         request.baseUrl,
       ),
+      stripImages,
     })
 
     const body: Record<string, unknown> = {
