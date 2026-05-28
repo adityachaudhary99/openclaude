@@ -309,6 +309,7 @@ function convertSystemPrompt(
 function convertToolResultContent(
   content: unknown,
   isError?: boolean,
+  stripImages?: boolean,
 ): string | Array<{ type: string; text?: string; image_url?: { url: string } }> {
   if (typeof content === 'string') {
     return isError ? `Error: ${content}` : content
@@ -330,6 +331,10 @@ function convertToolResultContent(
     }
 
     if (block?.type === 'image') {
+      if (stripImages) {
+        parts.push({ type: 'text', text: '[Image]' })
+        continue
+      }
       const source = block.source
       if (source?.type === 'url' && source.url) {
         parts.push({ type: 'image_url', image_url: { url: source.url } })
@@ -578,7 +583,7 @@ function convertMessages(
             result.push({
               role: 'tool',
               tool_call_id: id,
-              content: convertToolResultContent(tr.content, tr.is_error),
+              content: convertToolResultContent(tr.content, tr.is_error, options?.stripImages),
             })
           } else {
             logForDebugging(
@@ -616,7 +621,7 @@ function convertMessages(
         const assistantMsg: OpenAIMessage = {
           role: 'assistant',
           content: (() => {
-            const c = convertContentBlocks(textContent)
+            const c = convertContentBlocks(textContent, options?.stripImages)
             return typeof c === 'string'
               ? c
               : Array.isArray(c)
@@ -719,7 +724,7 @@ function convertMessages(
         const assistantMsg: OpenAIMessage = {
           role: 'assistant',
           content: (() => {
-            const c = convertContentBlocks(content)
+            const c = convertContentBlocks(content, options?.stripImages)
             return typeof c === 'string'
               ? c
               : Array.isArray(c)
