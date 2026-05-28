@@ -102,6 +102,9 @@ export async function processBashCommand(inputString: string, precedingInputBloc
         ...data,
         stderr: ''
       }, randomUUID());
+      // Formatter output is trusted: persisted-output markers contain
+      // structural XML, background-task output is plain text with no
+      // user-supplied content that needs escaping.
       if (typeof mapped.content === 'string') {
         stdout = mapped.content;
       }
