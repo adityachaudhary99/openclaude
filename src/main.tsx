@@ -3076,6 +3076,7 @@ async function run(): Promise<CommanderCommand> {
       mainThreadAgentDefinition,
       baseMainLoopModel,
       hasExplicitModelOverride,
+      fallbackModel: userSpecifiedFallbackModel,
       disableSlashCommands,
       dynamicMcpConfig,
       strictMcpConfig,
