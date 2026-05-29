@@ -24,9 +24,11 @@ export function escapeXmlAttr(s: string | null | undefined): string {
 
 /**
  * Decode XML/HTML entities produced by `escapeXml` back to literal characters.
- * Handles &amp; &lt; &gt;. Must decode &amp; first to avoid double-decoding.
+ * Handles &amp; &lt; &gt;. Must decode &lt; and &gt; first, then &amp; last,
+ * so that literal entity text (e.g. &amp;lt;tag&amp;gt;&amp;amp;) round-trips
+ * correctly without premature double-decoding.
  */
 export function unescapeXml(s: string | null | undefined): string {
   if (s == null) return ''
-  return s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+  return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
 }

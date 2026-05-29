@@ -25,6 +25,7 @@ import {
 } from '../constants/xml.js';
 import type { ExportFormat } from './exportFormats.js';
 import { renderToAnsiString } from './staticRender.js';
+import { unescapeXml } from './xml.js';
 
 /**
  * Minimal keybinding provider for static/headless renders.
@@ -645,7 +646,7 @@ function parseWrappedOutputPrefix(text: string): { output: TerminalOutput; rest:
       output: {
         source,
         stream,
-        text: text.slice(openTagEnd + 1, closeIndex),
+        text: unescapeXml(text.slice(openTagEnd + 1, closeIndex)),
       },
       rest: text.slice(closeIndex + closeTag.length),
     }
