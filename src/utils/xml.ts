@@ -21,3 +21,12 @@ export function escapeXml(s: string | null | undefined): string {
 export function escapeXmlAttr(s: string | null | undefined): string {
   return escapeXml(s).replace(/"/g, '&quot;').replace(/'/g, '&apos;')
 }
+
+/**
+ * Decode XML/HTML entities produced by `escapeXml` back to literal characters.
+ * Handles &amp; &lt; &gt;. Must decode &amp; first to avoid double-decoding.
+ */
+export function unescapeXml(s: string | null | undefined): string {
+  if (s == null) return ''
+  return s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+}
