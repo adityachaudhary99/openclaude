@@ -642,11 +642,16 @@ function parseWrappedOutputPrefix(text: string): { output: TerminalOutput; rest:
     if (openTagEnd === -1) return null
     const closeIndex = text.indexOf(closeTag, openTagEnd + 1)
     if (closeIndex === -1) return null
+    const rawText = text.slice(openTagEnd + 1, closeIndex)
+    const decodedText =
+      tag === BASH_STDOUT_TAG || tag === BASH_STDERR_TAG
+        ? unescapeXml(rawText)
+        : rawText
     return {
       output: {
         source,
         stream,
-        text: unescapeXml(text.slice(openTagEnd + 1, closeIndex)),
+        text: decodedText,
       },
       rest: text.slice(closeIndex + closeTag.length),
     }
