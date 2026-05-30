@@ -1079,6 +1079,40 @@ describe('persistActiveProviderProfileModel', () => {
     )
     expect(saved?.model).toBe('minimax-m2.5:cloud')
   })
+
+  test('prepends new model to multi-model mistral profile and updates provider env', async () => {
+    const {
+      applyProviderProfileToProcessEnv,
+      getProviderProfiles,
+      persistActiveProviderProfileModel,
+    } = await importFreshProviderProfileModules()
+    const activeProfile = buildMistralProfile({
+      id: 'saved_mistral',
+      baseUrl: 'https://api.mistral.ai/v1',
+      model: 'devstral-latest; mistral-small-latest',
+    })
+
+    saveMockGlobalConfig(current => ({
+      ...current,
+      providerProfiles: [activeProfile],
+      activeProviderProfileId: activeProfile.id,
+    }))
+    applyProviderProfileToProcessEnv(activeProfile)
+
+    const updated = persistActiveProviderProfileModel('mistral-large-latest')
+
+    expect(updated?.id).toBe(activeProfile.id)
+    expect(updated?.model).toBe('mistral-large-latest; devstral-latest; mistral-small-latest')
+    expect(process.env.MISTRAL_MODEL).toBe('mistral-large-latest')
+    expect(process.env.CLAUDE_CODE_PROVIDER_PROFILE_ENV_APPLIED_ID).toBe(
+      activeProfile.id,
+    )
+
+    const saved = getProviderProfiles().find(
+      (profile: ProviderProfile) => profile.id === activeProfile.id,
+    )
+    expect(saved?.model).toBe('mistral-large-latest; devstral-latest; mistral-small-latest')
+  })
 })
 
 describe('getProviderPresetDefaults', () => {
