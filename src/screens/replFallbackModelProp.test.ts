@@ -26,39 +26,51 @@ describe('fallbackModel: REPL Props contract', () => {
     expect(source).toContain('fallbackModel?: string')
   })
 
-  test('REPL destructures fallbackModel from Props into function body', () => {
+  test('REPL destructures fallbackModel from Props', () => {
     const source = readSource('REPL.tsx')
-    // fallbackModel appears in the Props type, in the destructuring param list,
-    // and in the query/session config construction code. At minimum:
-    // (1) type definition, (2) destructuring, (3+) usage in query calls
-    const matches = source.match(/fallbackModel/g)
-    expect(matches).not.toBeNull()
-    expect(matches!.length).toBeGreaterThanOrEqual(3)
+    // fallbackModel appears as a bare identifier in the destructuring param
+    // list (not just in the Props type). Verify it exists after the type def.
+    const typeIdx = source.indexOf('fallbackModel?: string')
+    expect(typeIdx).toBeGreaterThan(-1)
+    const afterType = source.indexOf('fallbackModel', typeIdx + 20)
+    expect(afterType).toBeGreaterThan(-1)
   })
 })
 
-describe('fallbackModel: ResumeConversation Props contract', () => {
+describe('fallbackModel: foreground query() path', () => {
+  test('fallbackModel appears inside a query({ call', () => {
+    const source = readSource('REPL.tsx')
+    // Foreground REPL path: fallbackModel is spread into sessionConfig
+    // which is passed to query({. Assert query({ and fallbackModel
+    // appear in proximity — the regex matches from query({ up to the
+    // nearest fallbackModel (non-greedy).
+    const match = source.match(/query\(\{[\s\S]*?fallbackModel/)
+    expect(match).not.toBeNull()
+  })
+})
+
+describe('fallbackModel: ResumeConversation path', () => {
   test('ResumeConversation Props type declares optional fallbackModel', () => {
     const source = readSource('ResumeConversation.tsx')
     expect(source).toContain('fallbackModel?: string')
   })
 
-  test('ResumeConversation passes fallbackModel through to REPL', () => {
+  test('ResumeConversation passes fallbackModel={fallbackModel} to REPL', () => {
     const source = readSource('ResumeConversation.tsx')
     expect(source).toContain('fallbackModel={fallbackModel}')
   })
 })
 
 describe('fallbackModel: background session path', () => {
-  test('REPL source references fallbackModel in query construction code', () => {
+  test('fallbackModel appears near startBackgroundSession call', () => {
     const source = readSource('REPL.tsx')
-    // fallbackModel must be referenced beyond just the Props type definition
-    // and destructuring — it must appear in the sessionConfig/queryParams
-    // spread for both foreground and background query paths.
-    const matches = source.match(/fallbackModel/g)
-    expect(matches).not.toBeNull()
-    // Type definition + destructuring = 2 minimum. This test requires at
-    // least 3, proving it's also used in query/session construction.
-    expect(matches!.length).toBeGreaterThanOrEqual(3)
+    // Ctrl+B path: fallbackModel is baked into queryParams passed
+    // to startBackgroundSession. Find the function call site (not
+    // the import) and verify fallbackModel is within the same handler
+    // code block — a 8000-char window after the call site.
+    const callIdx = source.indexOf('startBackgroundSession(')
+    expect(callIdx).toBeGreaterThan(-1)
+    const window = source.slice(callIdx, callIdx + 8000)
+    expect(window).toContain('fallbackModel')
   })
 })
