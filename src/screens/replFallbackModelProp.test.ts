@@ -140,14 +140,33 @@ describe('fallbackModel: background session path', () => {
     const source = readSource('REPL.tsx')
     // The startBackgroundSession call must reference `queryParams` —
     // the object that carries fallbackModel into the background
-    // session. The call fits on a single statement, so we slice from
-    // "(" to the matching ")" and assert queryParams appears in the
-    // argument list. Catches a regression that renames queryParams
-    // or stops spreading it into the background launch.
+    // session. The call is multi-line and contains nested function
+    // calls (getQuerySourceForREPL(),
+    // getAutoCompactTrackingForSession(backgroundSessionId), and
+    // setAutoCompactTrackingForSession(backgroundSessionId)), so a
+    // naive indexOf(')') would stop at the first inner close-paren
+    // and miss the matching one for startBackgroundSession itself.
+    // Walk the parens explicitly to find the call's matching close —
+    // same depth-tracking pattern as the launchResumeChooser test
+    // below. Catches a regression that renames queryParams or stops
+    // spreading it into the background launch.
     const callIdx = source.indexOf('startBackgroundSession(')
     expect(callIdx).toBeGreaterThan(-1)
-    const closeIdx = source.indexOf(')', callIdx)
-    expect(closeIdx).toBeGreaterThan(callIdx)
+    const openIdx = callIdx + 'startBackgroundSession'.length
+    let depth = 0
+    let closeIdx = -1
+    for (let i = openIdx; i < source.length; i++) {
+      const ch = source[i]
+      if (ch === '(') depth++
+      else if (ch === ')') {
+        depth--
+        if (depth === 0) {
+          closeIdx = i
+          break
+        }
+      }
+    }
+    expect(closeIdx).toBeGreaterThan(openIdx)
     const call = source.slice(callIdx, closeIdx + 1)
     expect(call).toContain('queryParams')
   })
