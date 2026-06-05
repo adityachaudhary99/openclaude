@@ -20,6 +20,10 @@ import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js';
 import { getCwd, runWithCwdOverride } from '../../utils/cwd.js';
 import { logForDebugging } from '../../utils/debug.js';
 import { isEnvTruthy } from '../../utils/envUtils.js';
+import {
+  shouldForceSyncSubagentsInCopilotMode,
+  shouldSuppressSubagentsInCopilotMode,
+} from '../../utils/copilotOptimization.js';
 import { AbortError, errorMessage, toError } from '../../utils/errors.js';
 import type { CacheSafeParams } from '../../utils/forkedAgent.js';
 import { lazySchema } from '../../utils/lazySchema.js';
@@ -457,6 +461,8 @@ export const AgentTool = buildTool({
       setAgentColor(selectedAgent.agentType, selectedAgent.color);
     }
 
+    const forceSyncCopilot = shouldForceSyncSubagentsInCopilotMode();
+
     // Resolve agent params for logging and prebuilt system prompts. runAgent
     // resolves the same settings again before the actual query.
     const resolvedAgentModel = getAgentModel(selectedAgent.model, toolUseContext.options.mainLoopModel, isForkPath ? undefined : model, permissionMode);
@@ -475,7 +481,7 @@ export const AgentTool = buildTool({
       color: selectedAgent.color as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
       is_built_in_agent: isBuiltInAgent(selectedAgent),
       is_resume: false,
-      is_async: (run_in_background === true || selectedAgent.background === true) && !isBackgroundTasksDisabled,
+      is_async: !forceSyncCopilot && (run_in_background === true || selectedAgent.background === true) && !isBackgroundTasksDisabled,
       is_fork: isForkPath
     });
 
@@ -548,7 +554,7 @@ export const AgentTool = buildTool({
       isBuiltInAgent: isBuiltInAgent(selectedAgent),
       startTime,
       agentType: selectedAgent.agentType,
-      isAsync: (run_in_background === true || selectedAgent.background === true) && !isBackgroundTasksDisabled
+      isAsync: !forceSyncCopilot && (run_in_background === true || selectedAgent.background === true) && !isBackgroundTasksDisabled
     };
 
     // Use inline env check instead of coordinatorModule to avoid circular
@@ -567,7 +573,29 @@ export const AgentTool = buildTool({
     // <task-notification> re-entry there is handled by the else branch
     // below (registerAsyncAgentTask + notifyOnCompletion).
     const assistantForceAsync = feature('KAIROS') ? appState.kairosEnabled : false;
-    const shouldRunAsync = (run_in_background === true || selectedAgent.background === true || isCoordinator || forceAsync || assistantForceAsync || (proactiveModule?.isProactiveActive() ?? false)) && !isBackgroundTasksDisabled;
+    if (shouldSuppressSubagentsInCopilotMode()) {
+      throw new Error(
+        `Sub-agents are disabled in GitHub Copilot mode to conserve Premium Requests. ` +
+        `Run this task directly instead of delegating to Agent('${selectedAgent.agentType}'). ` +
+        `To re-enable sub-agents, set GITHUB_COPILOT_MAX_SUBAGENTS=1, GITHUB_COPILOT_ALLOW_SUBAGENTS=1, ` +
+        `or GITHUB_COPILOT_OPTIMIZATION_DISABLED=1.`,
+      );
+    }
+    const shouldRunAsync = forceSyncCopilot
+      ? false
+      : (run_in_background === true || selectedAgent.background === true || isCoordinator || forceAsync || assistantForceAsync || (proactiveModule?.isProactiveActive() ?? false)) && !isBackgroundTasksDisabled;
+    if (forceSyncCopilot) {
+      const reason = isEnvTruthy(process.env.GITHUB_COPILOT_FORCE_SYNC_SUBAGENTS)
+        ? 'GITHUB_COPILOT_FORCE_SYNC_SUBAGENTS=1'
+        : 'GITHUB_COPILOT_MAX_SUBAGENTS=1 (default concurrency cap)';
+      logForDebugging(
+        `[CopilotOptimization] Agent '${selectedAgent.agentType}' forced to synchronous execution ` +
+        `because ${reason}. ` +
+        `Set GITHUB_COPILOT_MAX_SUBAGENTS>1, GITHUB_COPILOT_ALLOW_SUBAGENTS=1, ` +
+        `or GITHUB_COPILOT_OPTIMIZATION_DISABLED=1 ` +
+        `to allow background sub-agents.`,
+      );
+    }
     // Assemble the worker's tool pool independently of the parent's.
     // Workers always get their tools from assembleToolPool with their own
     // permission mode, so they aren't affected by the parent's tool
@@ -831,7 +859,7 @@ export const AgentTool = buildTool({
           type: 'background';
         }> | undefined;
         let cancelAutoBackground: (() => void) | undefined;
-        if (!isBackgroundTasksDisabled) {
+        if (!isBackgroundTasksDisabled && !forceSyncCopilot) {
           const registration = registerAgentForeground({
             agentId: syncAgentId,
             description,

@@ -1,0 +1,79 @@
+import { isEnvTruthy } from './envUtils.js'
+import { getAPIProvider } from './model/providers.js'
+
+/**
+ * GitHub Copilot Premium Request Optimization
+ *
+ * GitHub Copilot tracks "Premium Requests" per billing cycle. Each HTTP request
+ * to api.githubcopilot.com counts toward this quota. OpenClaude's sub-agent
+ * architecture can consume multiple Premium Requests per chat interaction
+ * (one per agent per turn), rapidly depleting the quota.
+ *
+ * This module provides opt-out optimizations to reduce Premium Request usage.
+ * In GitHub Copilot mode (CLAUDE_CODE_USE_GITHUB=1), optimization is enabled by
+ * default with a max sub-agent concurrency of 1. To customize behavior:
+ *
+ *   GITHUB_COPILOT_MAX_SUBAGENTS=N       Max concurrent sub-agents (default: 1).
+ *                                        Set to 0 to disable sub-agents entirely.
+ *   GITHUB_COPILOT_ALLOW_SUBAGENTS=1     Re-enable background/parallel sub-agents
+ *                                        even when MAX_SUBAGENTS is constrained.
+ *   GITHUB_COPILOT_FORCE_SYNC_SUBAGENTS=1 Force sub-agents to run synchronously
+ *                                        instead of in background.
+ *   GITHUB_COPILOT_OPTIMIZATION_DISABLED=1 Turn off all Copilot optimizations.
+ */
+
+/** Max practical sub-agent concurrency. Values above this are clamped. */
+const MAX_REASONABLE_SUBAGENTS = 10
+
+export function isGitHubCopilotMode(): boolean {
+  return getAPIProvider() === 'github'
+}
+
+export function isCopilotPremiumOptimizationEnabled(): boolean {
+  if (!isGitHubCopilotMode()) return false
+  return !isEnvTruthy(process.env.GITHUB_COPILOT_OPTIMIZATION_DISABLED)
+}
+
+/**
+ * Returns the maximum allowed sub-agent concurrency in GitHub Copilot mode.
+ *
+ * @returns 0 when not in Copilot mode (no constraint).
+ *          Clamped value when in Copilot mode (capped at MAX_REASONABLE_SUBAGENTS).
+ *          Defaults to 1 when GITHUB_COPILOT_MAX_SUBAGENTS is unset or invalid.
+ */
+export function getCopilotMaxConcurrentSubagents(): number {
+  if (!isGitHubCopilotMode()) return 0
+
+  const raw = process.env.GITHUB_COPILOT_MAX_SUBAGENTS
+  if (raw !== undefined) {
+    const parsed = parseInt(raw, 10)
+    if (!Number.isNaN(parsed) && parsed >= 0) {
+      return Math.min(parsed, MAX_REASONABLE_SUBAGENTS)
+    }
+  }
+
+  return 1
+}
+
+export function shouldSuppressSubagentsInCopilotMode(): boolean {
+  if (!isCopilotPremiumOptimizationEnabled()) return false
+  if (!isGitHubCopilotMode()) return false
+  if (isEnvTruthy(process.env.GITHUB_COPILOT_ALLOW_SUBAGENTS)) return false
+  return getCopilotMaxConcurrentSubagents() === 0
+}
+
+export function shouldForceSyncSubagentsInCopilotMode(): boolean {
+  if (!isCopilotPremiumOptimizationEnabled()) return false
+  if (!isGitHubCopilotMode()) return false
+
+  // Explicit force-sync flag always honored
+  if (isEnvTruthy(process.env.GITHUB_COPILOT_FORCE_SYNC_SUBAGENTS)) return true
+
+  // When ALLOW_SUBAGENTS is set, user explicitly opts into async sub-agents
+  if (isEnvTruthy(process.env.GITHUB_COPILOT_ALLOW_SUBAGENTS)) return false
+
+  // Enforce the concurrency cap: when max sub-agents is 1, run synchronously
+  // so that at most one sub-agent executes at a time. Without this, the parsed
+  // MAX_SUBAGENTS value would only affect the suppression (===0) check.
+  return getCopilotMaxConcurrentSubagents() === 1
+}
