@@ -66,7 +66,7 @@ CODE_OF_CONDUCT* text
 *.jpeg binary
 *.gif binary
 *.ico binary
-*.svg binary
+*.svg text
 *.eps binary
 *.bmp binary
 *.tif binary
