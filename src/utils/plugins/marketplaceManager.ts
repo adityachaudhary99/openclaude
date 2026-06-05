@@ -19,7 +19,7 @@
  */
 
 import axios from 'axios'
-import { writeFile } from 'fs/promises'
+import { cp, writeFile } from 'fs/promises'
 import isEqual from 'lodash-es/isEqual.js'
 import memoize from 'lodash-es/memoize.js'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'path'
@@ -1356,7 +1356,7 @@ async function cacheMarketplaceFromUrl(
 function getCachePathForSource(source: MarketplaceSource): string {
   const tempName =
     source.source === 'github'
-      ? source.repo.replace('/', '-')
+      ? source.repo.replace('/', '-').toLowerCase()
       : source.source === 'npm'
         ? source.package.replace('@', '').replace('/', '-')
         : source.source === 'file'
@@ -1707,7 +1707,9 @@ async function loadAndCacheMarketplace(
     }
 
     // Now rename the cache path to use the marketplace's actual name
-    const finalCachePath = join(cacheDir, marketplace.name)
+    // Normalize to lowercase to match getCachePathForSource's convention,
+    // which prevents case-only collisions on case-insensitive filesystems.
+    const finalCachePath = join(cacheDir, marketplace.name.toLowerCase())
     // Defense-in-depth: the schema rejects path separators, .., and . in marketplace.name,
     // but verify the computed path is a strict subdirectory of cacheDir before fs.rm.
     // A malicious marketplace.json with a crafted name must never cause us to rm outside
@@ -1724,26 +1726,34 @@ async function loadAndCacheMarketplace(
       temporaryCachePath !== finalCachePath &&
       !isLocalMarketplaceSource(source)
     ) {
-      try {
-        // Remove the destination if it already exists, then rename
+      // On case-insensitive filesystems (e.g. Windows NTFS), when temp and final
+      // paths differ only in case they refer to the same directory. fs.rm would
+      // destroy the source data, making the subsequent rename fail with ENOENT.
+      // Skip the rename block when paths are the same case-insensitively.
+      const samePathCaseInsensitive =
+        temporaryCachePath.toLowerCase() === finalCachePath.toLowerCase()
+      if (!samePathCaseInsensitive) {
         try {
-          onProgress?.('Cleaning up old marketplace cache…')
-        } catch (callbackError) {
-          logForDebugging(
-            `Progress callback error: ${errorMessage(callbackError)}`,
-            { level: 'warn' },
+          // Remove the destination if it already exists, then rename
+          safeCallProgress(onProgress, 'Cleaning up old marketplace cache…')
+          await fs.rm(finalCachePath, { recursive: true, force: true })
+          // Rename temp cache to final name
+          try {
+            await fs.rename(temporaryCachePath, finalCachePath)
+          } catch (renameError) {
+            // Rename may fail for cross-device moves (EXDEV). Fall back to
+            // copy + delete.
+            await cp(temporaryCachePath, finalCachePath, { recursive: true })
+            await fs.rm(temporaryCachePath, { recursive: true, force: true })
+          }
+          temporaryCachePath = finalCachePath
+          cleanupNeeded = false // Successfully renamed, no cleanup needed
+        } catch (error) {
+          const errorMsg = errorMessage(error)
+          throw new Error(
+            `Failed to finalize marketplace cache. Please manually delete the directory at ${finalCachePath} if it exists and try again.\n\nTechnical details: ${errorMsg}`,
           )
         }
-        await fs.rm(finalCachePath, { recursive: true, force: true })
-        // Rename temp cache to final name
-        await fs.rename(temporaryCachePath, finalCachePath)
-        temporaryCachePath = finalCachePath
-        cleanupNeeded = false // Successfully renamed, no cleanup needed
-      } catch (error) {
-        const errorMsg = errorMessage(error)
-        throw new Error(
-          `Failed to finalize marketplace cache. Please manually delete the directory at ${finalCachePath} if it exists and try again.\n\nTechnical details: ${errorMsg}`,
-        )
       }
     }
 
@@ -1891,7 +1901,10 @@ export async function addMarketplaceSource(
       const cacheDir = resolve(getMarketplacesCacheDir())
       const resolvedOld = resolve(oldEntry.installLocation)
       const resolvedNew = resolve(cachePath)
-      if (resolvedOld === resolvedNew) {
+      if (
+        resolvedOld === resolvedNew ||
+        resolvedOld.toLowerCase() === resolvedNew.toLowerCase()
+      ) {
         // Same dir — loadAndCacheMarketplace already overwrote in place.
         // Nothing to clean.
       } else if (
@@ -1962,7 +1975,7 @@ export async function removeMarketplaceSource(name: string): Promise<void> {
   // Clean up cached files (both directory and JSON formats)
   const fs = getFsImplementation()
   const cacheDir = getMarketplacesCacheDir()
-  const cachePath = join(cacheDir, name)
+  const cachePath = join(cacheDir, name.toLowerCase())
   await fs.rm(cachePath, { recursive: true, force: true })
   const jsonCachePath = join(cacheDir, `${name}.json`)
   await fs.rm(jsonCachePath, { force: true })
