@@ -193,3 +193,127 @@ describe('loadAndCacheMarketplace — Windows cache finalization (#1500)', () =>
     ).toBe(true)
   })
 })
+
+// Mock axios for the rename-failure fallback test. The 'url' source type
+// needs a network fetch; we stub it to return a synthetic marketplace.json
+// whose name differs from the temp-cache name, causing the rename block to
+// execute (the temp path has a timestamp-based name while the final path
+// uses marketplace.name.toLowerCase()).
+const fakeMarketplaceJson = {
+  name: 'MyMarketplace',
+  owner: { name: 'test' },
+  plugins: [],
+}
+const axiosGetSpy = mock(async () => ({
+  data: fakeMarketplaceJson,
+  status: 200,
+  headers: {},
+}))
+mock.module('axios', () => ({
+  default: {
+    get: axiosGetSpy,
+  },
+  isAxiosError: () => false,
+}))
+
+// Re-import with mocked axios so the module under test picks up the mock.
+const { loadAndCacheMarketplace: loadAndCacheWithMockedAxios } = (
+  await import('./marketplaceManager.ts')
+)._test
+
+/**
+ * Regression test: rename-failure fallback (EXDEV / cross-device error).
+ *
+ * When fs.rename fails (e.g. EXDEV on cross-device moves), the cache
+ * finalization must fall back to cp + rm. This test uses a 'url' source
+ * (with a mocked HTTP response) so that the temporary cache path (timestamp-
+ * based) and the final cache path (marketplace.name.toLowerCase()) truly
+ * differ, ensuring the samePathCaseInsensitive guard does not skip the
+ * rename block. The test then forces rename to throw and verifies the
+ * fallback correctly copies the temp cache to the final location, cleans up
+ * the temp path, and returns the final cache path.
+ */
+describe('loadAndCacheMarketplace — rename failure fallback (EXDEV)', () => {
+  let tempDir: string
+  let originalFs: FsOperations
+  let originalCacheDir: string | undefined
+  let rmSpy: Mock<typeof NodeFsOperations.rm>
+  let renameSpy: Mock<typeof NodeFsOperations.rename>
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'mp-cache-'))
+    originalCacheDir = process.env.CLAUDE_CODE_PLUGIN_CACHE_DIR
+    process.env.CLAUDE_CODE_PLUGIN_CACHE_DIR = tempDir
+
+    originalFs = getFsImplementation()
+    rmSpy = mock(
+      (path: string, options?: { recursive?: boolean; force?: boolean }) =>
+        NodeFsOperations.rm(path, options),
+    )
+    renameSpy = mock((oldPath: string, newPath: string) =>
+      NodeFsOperations.rename(oldPath, newPath),
+    )
+    setFsImplementation({
+      ...NodeFsOperations,
+      rm: rmSpy,
+      rename: renameSpy,
+    })
+  })
+
+  afterEach(() => {
+    setFsImplementation(originalFs)
+    if (originalCacheDir === undefined) {
+      delete process.env.CLAUDE_CODE_PLUGIN_CACHE_DIR
+    } else {
+      process.env.CLAUDE_CODE_PLUGIN_CACHE_DIR = originalCacheDir
+    }
+    rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  test('falls back to cp+rm when rename throws EXDEV', async () => {
+    // Force rename to throw, simulating a cross-device move error.
+    renameSpy.mockImplementation(() => {
+      throw new Error('EXDEV: cross-device link not permitted, rename')
+    })
+
+    // Use a 'url' source so the temp cache path (temp_<timestamp>.json
+    // from getCachePathForSource) differs from the final cache path
+    // (mymarketplace from marketplace.name.toLowerCase()). This bypasses
+    // the samePathCaseInsensitive guard and lets the rename block execute.
+    const source: MarketplaceSource = {
+      source: 'url',
+      url: 'https://example.com/marketplace.json',
+      name: 'my-test-marketplace',
+    }
+
+    const result = await loadAndCacheWithMockedAxios(source)
+
+    const cacheDir = join(tempDir, 'marketplaces')
+    const finalCachePath = join(cacheDir, 'mymarketplace')
+
+    // After the fallback, the result cache path must be the final path
+    expect(result.cachePath).toBe(finalCachePath)
+
+    // The marketplace manifest must exist at the final location.
+    // For 'url' sources the cache is stored as a flat JSON file named
+    // after the marketplace (e.g. 'mymarketplace'), not a directory.
+    expect(existsSync(finalCachePath)).toBe(true)
+
+    // The temporary file (temp_<timestamp>.json) must be cleaned up.
+    // Find the temp path by looking for a non-final rm call.
+    const rmCalls = rmSpy.mock.calls
+    const tempRmCall = rmCalls.find(
+      (call: unknown[]) =>
+        typeof call[0] === 'string' &&
+        !(call[0] as string).endsWith('mymarketplace') &&
+        (call[0] as string).includes('marketplaces') &&
+        (call[1] as { recursive?: boolean; force?: boolean })?.force === true,
+    )
+    expect(tempRmCall).toBeDefined()
+
+    // Verify the temp path no longer exists
+    if (tempRmCall) {
+      expect(existsSync(tempRmCall[0] as string)).toBe(false)
+    }
+  })
+})
