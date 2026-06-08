@@ -24,6 +24,11 @@ import {
 // globally. mock.module with original() forces the real module, overriding
 // any previously registered mock for this module.
 mock.module('./marketplaceManager.js', async (original) => {
+  // When this test runs in isolation (no prior mock from other test files),
+  // `original` is undefined and calling it would throw TypeError.
+  // Only call original() when it's a valid function — otherwise the real
+  // module is already loaded and nothing needs to be restored.
+  if (typeof original !== 'function') return
   return await original()
 })
 
@@ -323,15 +328,27 @@ describe('loadAndCacheMarketplace — rename failure fallback (EXDEV)', () => {
     // after the marketplace (e.g. 'mymarketplace'), not a directory.
     expect(existsSync(finalCachePath)).toBe(true)
 
-    // The temporary file (temp_<timestamp>.json) must be cleaned up.
-    // Compare post-call directory state against the pre-call snapshot
-    // to verify only the final file was added. Filter out any lingering
-    // temp files (the delta captures pre-call state, but the function can
-    // leave temp files from the axios mock/flush edge case).
+    // renameSpy must have been called at least once and must have thrown,
+    // proving the code entered the catch block that triggers the cp+rm
+    // fallback. Without this assertion, the test would still pass if the
+    // code somehow reached the final file via a different path.
+    expect(renameSpy).toHaveBeenCalled()
+    const renameCalls = renameSpy.mock.calls
+    expect(renameCalls.length).toBeGreaterThan(0)
+
+    // The temporary file (temp_<timestamp>.json) MUST be cleaned up — no
+    // temp artifacts may remain after the fallback runs. This is the
+    // explicit cleanup assertion the previous version of this test
+    // weakened by filtering temp_* entries out of the delta.
     const afterEntries = readdirSync(cacheDir)
-    const newEntries = afterEntries.filter(
-      e => !beforeEntries.has(e) && !e.startsWith('temp_'),
+    const lingeringTempFiles = afterEntries.filter(e =>
+      e.startsWith('temp_'),
     )
+    expect(lingeringTempFiles).toEqual([])
+
+    // Compare post-call directory state against the pre-call snapshot to
+    // verify only the final file was added.
+    const newEntries = afterEntries.filter(e => !beforeEntries.has(e))
     expect(newEntries).toEqual(['mymarketplace'])
   })
 })
