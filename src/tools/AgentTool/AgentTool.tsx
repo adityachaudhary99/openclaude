@@ -22,6 +22,7 @@ import { logForDebugging } from '../../utils/debug.js';
 import { isEnvTruthy } from '../../utils/envUtils.js';
 import {
   getCopilotMaxConcurrentSubagents,
+  isCopilotPremiumOptimizationEnabled,
   shouldForceSyncSubagentsInCopilotMode,
   shouldSuppressSubagentsInCopilotMode,
 } from '../../utils/copilotOptimization.js';
@@ -588,11 +589,11 @@ export const AgentTool = buildTool({
     if (forceSyncCopilot) {
       const reason = isEnvTruthy(process.env.GITHUB_COPILOT_FORCE_SYNC_SUBAGENTS)
         ? 'GITHUB_COPILOT_FORCE_SYNC_SUBAGENTS=1'
-        : 'GITHUB_COPILOT_MAX_SUBAGENTS=1 (default concurrency cap)';
+        : `GITHUB_COPILOT_MAX_SUBAGENTS=${getCopilotMaxConcurrentSubagents()} (concurrency capped)`;
       logForDebugging(
         `[CopilotOptimization] Agent '${selectedAgent.agentType}' forced to synchronous execution ` +
         `because ${reason}. ` +
-        `Set GITHUB_COPILOT_MAX_SUBAGENTS>1, GITHUB_COPILOT_ALLOW_SUBAGENTS=1, ` +
+        `Set GITHUB_COPILOT_MAX_SUBAGENTS=0, GITHUB_COPILOT_ALLOW_SUBAGENTS=1, ` +
         `or GITHUB_COPILOT_OPTIMIZATION_DISABLED=1 ` +
         `to allow background sub-agents.`,
       );
@@ -1318,6 +1319,10 @@ export const AgentTool = buildTool({
     return `${prefix}${i.prompt}`;
   },
   isConcurrencySafe() {
+    // When Copilot optimizations are disabled, sub-agents are fully
+    // unrestricted and can run concurrently.
+    if (!isCopilotPremiumOptimizationEnabled()) return true
+
     // When Copilot sub-agent concurrency is capped, force serial execution
     // via the tool scheduler so at most one sub-agent runs at a time.
     // A single assistant message with multiple Agent/Task calls could

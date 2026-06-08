@@ -72,8 +72,8 @@ export function shouldForceSyncSubagentsInCopilotMode(): boolean {
   // When ALLOW_SUBAGENTS is set, user explicitly opts into async sub-agents
   if (isEnvTruthy(process.env.GITHUB_COPILOT_ALLOW_SUBAGENTS)) return false
 
-  // Enforce the concurrency cap: when max sub-agents is 1, run synchronously
-  // so that at most one sub-agent executes at a time. Without this, the parsed
-  // MAX_SUBAGENTS value would only affect the suppression (===0) check.
-  return getCopilotMaxConcurrentSubagents() === 1
+  // Enforce the concurrency cap: when max sub-agents > 0, run synchronously
+  // so that at most one sub-agent executes at a time. When cap is 0, agents
+  // are suppressed entirely via shouldSuppressSubagentsInCopilotMode().
+  return getCopilotMaxConcurrentSubagents() > 0
 }
