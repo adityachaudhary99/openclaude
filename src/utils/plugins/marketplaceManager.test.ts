@@ -7,7 +7,7 @@ import {
   type Mock,
   test,
 } from 'bun:test'
-import { existsSync, mkdtempSync, rmSync } from 'fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
@@ -300,20 +300,9 @@ describe('loadAndCacheMarketplace — rename failure fallback (EXDEV)', () => {
     expect(existsSync(finalCachePath)).toBe(true)
 
     // The temporary file (temp_<timestamp>.json) must be cleaned up.
-    // Find the temp path by looking for a non-final rm call.
-    const rmCalls = rmSpy.mock.calls
-    const tempRmCall = rmCalls.find(
-      (call: unknown[]) =>
-        typeof call[0] === 'string' &&
-        !(call[0] as string).endsWith('mymarketplace') &&
-        (call[0] as string).includes('marketplaces') &&
-        (call[1] as { recursive?: boolean; force?: boolean })?.force === true,
-    )
-    expect(tempRmCall).toBeDefined()
-
-    // Verify the temp path no longer exists
-    if (tempRmCall) {
-      expect(existsSync(tempRmCall[0] as string)).toBe(false)
-    }
+    // Verify by listing the cache directory — only the final file should remain.
+    const cacheEntries = readdirSync(cacheDir)
+    expect(cacheEntries).toHaveLength(1)
+    expect(cacheEntries[0]).toBe('mymarketplace')
   })
 })
