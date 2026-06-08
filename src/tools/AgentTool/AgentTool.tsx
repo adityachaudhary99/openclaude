@@ -1323,11 +1323,13 @@ export const AgentTool = buildTool({
     // unrestricted and can run concurrently.
     if (!isCopilotPremiumOptimizationEnabled()) return true
 
-    // When Copilot sub-agent concurrency is capped, force serial execution
-    // via the tool scheduler so at most one sub-agent runs at a time.
-    // A single assistant message with multiple Agent/Task calls could
-    // otherwise bypass the cap through the scheduler's concurrent batching.
-    return !(getCopilotMaxConcurrentSubagents() > 0)
+    // Align with the launch path: use shouldForceSyncSubagentsInCopilotMode()
+    // to decide whether the scheduler must serialize sub-agent calls.
+    // This prevents mismatches where the launch path allows async but the
+    // scheduler still serializes, or vice versa (e.g. ALLOW_SUBAGENTS=1
+    // makes launch async but scheduler serialized; FORCE_SYNC=1 + MAX=0
+    // made launch sync but scheduler treated it as concurrency-safe).
+    return !shouldForceSyncSubagentsInCopilotMode()
   },
   userFacingName,
   userFacingNameBackgroundColor,

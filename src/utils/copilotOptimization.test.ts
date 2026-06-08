@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 
 // We test copilotOptimization functions by mocking the provider module.
 // The module reads getAPIProvider() at call time, so we swap it per test.
@@ -37,6 +37,10 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  mock.restore()
+})
+
+afterAll(() => {
   mock.restore()
 })
 
