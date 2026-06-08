@@ -1,4 +1,5 @@
 import {
+  afterAll,
   afterEach,
   beforeEach,
   describe,
@@ -51,6 +52,7 @@ function toolUseContext() {
     getAppState: mock(() => ({
       toolPermissionContext: {},
       effortValue: undefined,
+      tasks: {} as Record<string, unknown>,
     })),
     onCompactProgress: mock(() => {}),
     setStreamMode: mock(() => {}),
@@ -58,7 +60,6 @@ function toolUseContext() {
     setSDKStatus: mock(() => {}),
     abortController: new AbortController(),
     readFileState: new Map(),
-    loadedNestedMemoryPaths: undefined,
   } as never
 }
 
@@ -114,29 +115,53 @@ function clearProviderEnv(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Mock helpers
+// Mock infrastructure
 // ---------------------------------------------------------------------------
 
 /**
- * Build a helper that mocks everything compactConversation + streamCompactSummary
- * touch, so we can exercise the isAnthropicProvider() gate without real network
- * or real GrowthBook / hooks / token counting.
+ * Options that control the behavior of the compact mock fixture.
+ *
+ * **Essential mocks** (required for the provider gate test — must be overridable):
+ * - `isAnthropicProvider` — the gate under test
+ * - `runForkedAgent` — spy target; asserted on in both test cases
+ * - `growthBookDefault` — controls the GrowthBook flag that gates cache-sharing
+ *
+ * **Defensive stubs** (prevent transitive import/side-effect failures):
+ * - Everything else registered by registerCommonCompactStubs is a defensive
+ *   stub needed to let compactConversation() run start-to-finish without real
+ *   network, GrowthBook, hooks, token counting, or filesystem I/O.
  */
-type CompactMockOptions = {
+export type CompactMockOptions = {
+  /** Mock for isAnthropicProvider(). ESSENTIAL — the gate under test. */
   isAnthropicProvider?: () => boolean
+  /** Mock for runForkedAgent(). ESSENTIAL — spy asserted on by both tests. */
   runForkedAgent?: ReturnType<typeof mock>
+  /** GrowthBook default for tengu_compact_cache_prefix. */
   growthBookDefault?: boolean
+  /** Mock for executePreCompactHooks. */
   executePreCompactHooks?: ReturnType<typeof mock>
 }
 
-async function importCompact(options: CompactMockOptions = {}) {
+/**
+ * Register all common (defensive) stubs needed by compactConversation() and
+ * streamCompactSummary(). Returns an object with hooks that the caller can
+ * inspect or override, most importantly `runForkedAgent`.
+ *
+ * This is the **shared fixture** — new compact tests should call this instead
+ * of copying the ~40 mock.module() calls.  Annotated inline: [ESSENTIAL] marks
+ * mocks that the provider gate test specifically depends on; all others are
+ * DEFENSIVE (prevent transitive import / side-effect / I/O failures).
+ */
+function registerCommonCompactStubs(options: CompactMockOptions = {}) {
   mock.restore()
 
-  // --- Provider gate (the key dependency under test) ---
+  // --- Provider gate (ESSENTIAL — the key dependency under test) ---
+  // Complete mock: every export from betas.ts is listed so a leaked mock
+  // never causes other test files to see a partial module with missing exports.
   mock.module('../../utils/betas.js', () => ({
     isAnthropicProvider:
       options.isAnthropicProvider ?? mock(() => false),
-    // Other exports from betas.ts that compact.ts may import transitively:
+    // DEFENSIVE — other betas.ts exports that compact.ts imports
     getMergedBetas: mock(() => []),
     isGithubNativeAnthropicMode: mock(() => false),
     modelSupportsInterleavedThinking: mock(() => false),
@@ -149,9 +174,17 @@ async function importCompact(options: CompactMockOptions = {}) {
     clearBetasCaches: mock(() => {}),
     CLAUDE_CODE_20250219_BETA_HEADER: 'claude-code-20250219',
     CLI_INTERNAL_BETA_HEADER: '',
+    // Complete — remaining betas.ts exports (not used by compact.ts directly
+    // but needed by other test files if this mock ever leaks)
+    filterAllowedSdkBetas: mock(() => undefined),
+    modelSupportsISP: mock(() => false),
+    modelSupportsAutoMode: mock(() => false),
+    getToolSearchBetaHeader: mock(() => ''),
+    shouldIncludeFirstPartyOnlyBetas: mock(() => false),
+    shouldUseGlobalCacheScope: mock(() => false),
   }))
 
-  // --- Forked agent (spy it so we can assert call count) ---
+  // --- Forked agent (ESSENTIAL — spy for call-count assertions) ---
   const runForkedAgent =
     options.runForkedAgent ??
     mock(async () => ({
@@ -169,19 +202,19 @@ async function importCompact(options: CompactMockOptions = {}) {
     runForkedAgent,
   }))
 
-  // --- GrowthBook ---
+  // --- GrowthBook (DEFENSIVE) ---
   mock.module('../analytics/growthbook.js', () => ({
     getFeatureValue_CACHED_MAY_BE_STALE: mock(
       () => options.growthBookDefault ?? true,
     ),
   }))
 
-  // --- Analytics ---
+  // --- Analytics (DEFENSIVE) ---
   mock.module('../analytics/index.js', () => ({
     logEvent: mock(() => {}),
   }))
 
-  // --- Hooks ---
+  // --- Hooks (DEFENSIVE) ---
   mock.module('../../utils/hooks.js', () => ({
     executePreCompactHooks:
       options.executePreCompactHooks ??
@@ -193,7 +226,7 @@ async function importCompact(options: CompactMockOptions = {}) {
     executePostCompactHooks: mock(async () => []),
   }))
 
-  // --- Token helpers ---
+  // --- Token helpers (DEFENSIVE) ---
   mock.module('../../utils/tokens.js', () => ({
     tokenCountWithEstimation: mock(() => 1000),
     tokenCountFromLastAPIResponse: mock(() => 100),
@@ -203,14 +236,13 @@ async function importCompact(options: CompactMockOptions = {}) {
     })),
   }))
 
-  // --- Token estimation ---
+  // --- Token estimation (DEFENSIVE) ---
   mock.module('../tokenEstimation.js', () => ({
     roughTokenCountEstimation: mock(() => 100),
     roughTokenCountEstimationForMessages: mock(() => 500),
   }))
 
-  // --- Message helpers (keep real behavior for the ones compact.ts calls) ---
-  // We stub just what's needed; the rest falls through to real impl.
+  // --- Message helpers (DEFENSIVE — stub just enough) ---
   mock.module('../../utils/messages.js', () => ({
     createUserMessage: mock(
       (opts: { content: string; isCompactSummary?: boolean }) => ({
@@ -244,10 +276,9 @@ async function importCompact(options: CompactMockOptions = {}) {
     normalizeMessagesForAPI: mock((msgs: Message[]) => msgs),
   }))
 
-  // --- API / streaming ---
+  // --- API / streaming (DEFENSIVE) ---
   mock.module('../api/claude.js', () => ({
     queryModelWithStreaming: mock(async function* () {
-      // Yield a single assistant message — the streaming path consumes it.
       yield {
         type: 'assistant' as const,
         message: {
@@ -275,53 +306,53 @@ async function importCompact(options: CompactMockOptions = {}) {
     getRetryDelay: mock(() => 0),
   }))
 
-  // --- Session activity ---
+  // --- Session activity (DEFENSIVE) ---
   mock.module('../../utils/sessionActivity.js', () => ({
     isSessionActivityTrackingActive: mock(() => false),
     sendSessionActivitySignal: mock(() => {}),
   }))
 
-  // --- Tool search ---
+  // --- Tool search (DEFENSIVE) ---
   mock.module('../../utils/toolSearch.js', () => ({
     isToolSearchEnabled: mock(async () => false),
     extractDiscoveredToolNames: mock(() => new Set()),
   }))
 
-  // --- Compact prompt ---
+  // --- Compact prompt (DEFENSIVE) ---
   mock.module('./prompt.js', () => ({
     getCompactPrompt: mock(() => 'Please summarize this conversation.'),
     getCompactUserSummaryMessage: mock(() => 'Conversation summary'),
     getPartialCompactPrompt: mock(() => 'Summarize this part.'),
   }))
 
-  // --- Compact grouping ---
+  // --- Compact grouping (DEFENSIVE) ---
   mock.module('./grouping.js', () => ({
     groupMessagesByApiRound: mock((msgs: Message[]) => [msgs]),
   }))
 
-  // --- Config ---
+  // --- Config (DEFENSIVE) ---
   mock.module('../../utils/config.js', () => ({
     ...realConfig,
     getMemoryPath: mock(() => '/tmp/memory'),
   }))
 
-  // --- File state cache ---
+  // --- File state cache (DEFENSIVE) ---
   mock.module('../../utils/fileStateCache.js', () => ({
     cacheToObject: mock(() => ({})),
   }))
 
-  // --- Session storage ---
+  // --- Session storage (DEFENSIVE) ---
   mock.module('../../utils/sessionStorage.js', () => ({
     getTranscriptPath: mock(() => '/tmp/transcript'),
     reAppendSessionMetadata: mock(() => {}),
   }))
 
-  // --- Session start hooks ---
+  // --- Session start hooks (DEFENSIVE) ---
   mock.module('../../utils/sessionStart.js', () => ({
     processSessionStartHooks: mock(async () => []),
   }))
 
-  // --- Attachments ---
+  // --- Attachments (DEFENSIVE) ---
   mock.module('../../utils/attachments.js', () => ({
     createAttachmentMessage: mock(() => ({
       type: 'attachment' as const,
@@ -335,23 +366,23 @@ async function importCompact(options: CompactMockOptions = {}) {
     getMcpInstructionsDeltaAttachment: mock(() => []),
   }))
 
-  // --- Plans ---
+  // --- Plans (DEFENSIVE) ---
   mock.module('../../utils/plans.js', () => ({
     getPlan: mock(() => null),
     getPlanFilePath: mock(() => '/tmp/plan'),
   }))
 
-  // --- Path ---
+  // --- Path (DEFENSIVE) ---
   mock.module('../../utils/path.js', () => ({
     expandPath: mock((p: string) => p),
   }))
 
-  // --- Sleep ---
+  // --- Sleep (DEFENSIVE) ---
   mock.module('../../utils/sleep.js', () => ({
     sleep: mock(async () => {}),
   }))
 
-  // --- Logging ---
+  // --- Logging (DEFENSIVE) ---
   mock.module('../../utils/log.js', () => ({
     logError: mock(() => {}),
   }))
@@ -360,19 +391,19 @@ async function importCompact(options: CompactMockOptions = {}) {
     logForDebugging: mock(() => {}),
   }))
 
-  // --- Slow operations ---
+  // --- Slow operations (DEFENSIVE) ---
   mock.module('../../utils/slowOperations.js', () => ({
     jsonStringify: mock(() => '{}'),
   }))
 
-  // --- Bootstrap state ---
+  // --- Bootstrap state (DEFENSIVE) ---
   mock.module('../../bootstrap/state.js', () => ({
     markPostCompaction: mock(() => {}),
     getInvokedSkillsForAgent: mock(() => []),
     getOriginalCwd: mock(() => '/tmp'),
   }))
 
-  // --- Tools ---
+  // --- Tools (DEFENSIVE) ---
   mock.module('../../tools/FileReadTool/FileReadTool.js', () => ({
     FileReadTool: { name: 'Read', isMcp: false },
   }))
@@ -386,7 +417,7 @@ async function importCompact(options: CompactMockOptions = {}) {
     ToolSearchTool: { name: 'ToolSearch', isMcp: false },
   }))
 
-  // --- Context ---
+  // --- Context (DEFENSIVE) ---
   mock.module('../../utils/context.js', () => ({
     COMPACT_MAX_OUTPUT_TOKENS: 8192,
   }))
@@ -396,64 +427,108 @@ async function importCompact(options: CompactMockOptions = {}) {
     tokenStatsToStatsigMetrics: mock(() => ({})),
   }))
 
-  // --- Project instructions ---
+  // --- Project instructions (DEFENSIVE) ---
   mock.module('../../utils/projectInstructions.js', () => ({
     getProjectInstructionFilePaths: mock(() => []),
   }))
 
-  // --- Memory types ---
+  // --- Memory types (DEFENSIVE) ---
   mock.module('../../utils/memory/types.js', () => ({
     MEMORY_TYPE_VALUES: [],
   }))
 
-  // --- System prompt type ---
+  // --- System prompt type (DEFENSIVE) ---
   mock.module('../../utils/systemPromptType.js', () => ({
     asSystemPrompt: mock((arr: string[]) => arr),
   }))
 
-  // --- Task output ---
+  // --- Task output (DEFENSIVE) ---
   mock.module('../../utils/task/diskOutput.js', () => ({
     getTaskOutputPath: mock(() => '/tmp/task'),
   }))
 
-  // --- Errors ---
+  // --- Errors (DEFENSIVE) ---
   mock.module('../../utils/errors.js', () => ({
     hasExactErrorMessage: mock(() => false),
   }))
 
-  // --- Model / providers ---
+  // --- Model / providers (DEFENSIVE) ---
+  // Complete mock: every export from providers.ts is listed.
   mock.module('../../utils/model/providers.js', () => ({
     getAPIProvider: mock(() => 'firstParty'),
     isGithubNativeAnthropicMode: mock(() => false),
+    usesAnthropicAccountFlow: mock(() => true),
+    getAPIProviderForStatsig: mock(() => 'firstParty' as const),
+    isFirstPartyAnthropicBaseUrl: mock(() => true),
   }))
 
-  // --- Auth ---
+  // --- Auth (DEFENSIVE) ---
   mock.module('../../utils/auth.js', () => ({
     isClaudeAISubscriber: mock(() => false),
   }))
 
-  // --- Env utils ---
+  // --- Env utils (DEFENSIVE) ---
+  // Complete mock: every export from envUtils.ts is listed.
   mock.module('../../utils/envUtils.js', () => ({
     isEnvDefinedFalsy: mock(() => false),
     isEnvTruthy: mock(() => false),
+    // Remaining envUtils.ts exports (not used by compact.ts but needed
+    // by other test files if this mock ever leaks)
+    migrateLegacyClaudeConfigHome: mock(() => true),
+    resolveClaudeConfigHomeDir: mock(() => '/tmp/.openclaude'),
+    setClaudeConfigHomeDirForTesting: mock(() => {}),
+    getClaudeConfigHomeDir: mock(() => '/tmp/.openclaude'),
+    getTeamsDir: mock(() => '/tmp/.openclaude/teams'),
+    getProjectsDir: mock(() => '/tmp/.openclaude/projects'),
+    hasNodeOption: mock(() => false),
+    isBareMode: mock(() => false),
+    parseEnvVars: mock(() => ({})),
+    getAWSRegion: mock(() => 'us-east-1'),
+    getDefaultVertexRegion: mock(() => 'us-east5'),
+    shouldMaintainProjectWorkingDir: mock(() => false),
+    isRunningOnHomespace: mock(() => false),
+    isInProtectedNamespace: mock(() => false),
+    getVertexRegionForModel: mock(() => 'us-east5'),
   }))
 
-  // --- Model support overrides ---
+  // --- Model support overrides (DEFENSIVE) ---
   mock.module('../../utils/model/modelSupportOverrides.js', () => ({
     get3PModelCapabilityOverride: mock(() => undefined),
   }))
 
-  // --- Settings ---
+  // --- Settings (DEFENSIVE) ---
   mock.module('../../utils/settings/settings.js', () => ({
     getInitialSettings: mock(() => ({})),
   }))
 
-  // --- Model ---
+  // --- Model (DEFENSIVE) ---
   mock.module('../../utils/model/model.js', () => ({
     getCanonicalName: mock((m: string) => m),
   }))
 
-  // Dynamic import with cache-busting
+  return { runForkedAgent }
+}
+
+/**
+ * Import the compact module with all transitive dependencies stubbed.
+ *
+ * **Provider gate test mocks (ESSENTIAL):**
+ * - `isAnthropicProvider` — gate under test, injected via options
+ * - `runForkedAgent` — spy target, returned so tests can assert call count
+ * - `getFeatureValue_CACHED_MAY_BE_STALE` (growthBookDefault) — controls the
+ *   GrowthBook flag that gates cache-sharing alongside isAnthropicProvider()
+ *
+ * **Defensive stubs (everything else):**
+ * - All other ~40 mock.module() calls are defensive fall-through stubs that
+ *   prevent the compactConversation() → streamCompactSummary() → post-compaction
+ *   pipeline from hitting real network, GrowthBook, hooks, token counting,
+ *   skill loading, or filesystem I/O.  Without them the import alone would
+ *   trigger hundreds of failed transitive resolution steps.
+ */
+async function importCompact(options: CompactMockOptions = {}) {
+  const { runForkedAgent } = registerCommonCompactStubs(options)
+
+  // Dynamic import with cache-busting so each test gets fresh module state
   const nonce = `${Date.now()}-${Math.random()}`
   const mod = await import(`./compact.ts?test=${nonce}`)
   return { ...mod, runForkedAgent }
@@ -477,6 +552,13 @@ afterEach(() => {
   }
 })
 
+// Safety net: restore mocks after all tests in this file finish, so that
+// no mock.module() registration leaks into subsequent test files.
+afterAll(() => {
+  mock.restore()
+  restoreEnv()
+})
+
 describe('compactConversation provider gate', () => {
   test('skips forked-agent cache-sharing for non-Anthropic providers', async () => {
     // When isAnthropicProvider() returns false (e.g. OpenAI), the forked-agent
@@ -489,13 +571,7 @@ describe('compactConversation provider gate', () => {
     const ctx = toolUseContext()
     const csp = cacheSafeParams(messages)
 
-    try {
-      await compactConversation(messages, ctx, csp, false)
-    } catch {
-      // Post-compaction logic may still fail in the test harness, but the
-      // gate check happens before those calls. What matters is whether
-      // runForkedAgent was invoked.
-    }
+    await compactConversation(messages, ctx, csp, false)
 
     expect(runForkedAgent).not.toHaveBeenCalled()
   })
@@ -511,12 +587,7 @@ describe('compactConversation provider gate', () => {
     const ctx = toolUseContext()
     const csp = cacheSafeParams(messages)
 
-    try {
-      await compactConversation(messages, ctx, csp, false)
-    } catch {
-      // Post-compaction logic may still fail, but runForkedAgent should
-      // have been called by streamCompactSummary.
-    }
+    await compactConversation(messages, ctx, csp, false)
 
     expect(runForkedAgent).toHaveBeenCalled()
   })
