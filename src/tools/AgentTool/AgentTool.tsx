@@ -465,6 +465,38 @@ export const AgentTool = buildTool({
 
     const forceSyncCopilot = shouldForceSyncSubagentsInCopilotMode();
 
+    // Use inline env check instead of coordinatorModule to avoid circular
+    // dependency issues during test module loading.
+    const isCoordinator = feature('COORDINATOR_MODE') ? isEnvTruthy(process.env.CLAUDE_CODE_COORDINATOR_MODE) : false;
+
+    // Fork subagent experiment: force ALL spawns async for a unified
+    // <task-notification> interaction model (not just fork spawns — all of them).
+    const forceAsync = isForkSubagentEnabled();
+
+    // Assistant mode: force all agents async. Synchronous subagents hold the
+    // main loop's turn open until they complete — the daemon's inputQueue
+    // backs up, and the first overdue cron catch-up on spawn becomes N
+    // serial subagent turns blocking all user input. Same gate as
+    // executeForkedSlashCommand's fire-and-forget path; the
+    // <task-notification> re-entry there is handled by the else branch
+    // below (registerAsyncAgentTask + notifyOnCompletion).
+    const assistantForceAsync = feature('KAIROS') ? appState.kairosEnabled : false;
+
+    // Compute shouldRunAsync once, used by both the telemetry log below and
+    // the actual run decision. Must be computed before the telemetry so the
+    // reported is_async matches the actual execution mode.
+    if (shouldSuppressSubagentsInCopilotMode()) {
+      throw new Error(
+        `Sub-agents are disabled in GitHub Copilot mode to conserve Premium Requests. ` +
+        `Run this task directly instead of delegating to Agent('${selectedAgent.agentType}'). ` +
+        `To re-enable sub-agents, set GITHUB_COPILOT_MAX_SUBAGENTS=1, GITHUB_COPILOT_ALLOW_SUBAGENTS=1, ` +
+        `or GITHUB_COPILOT_OPTIMIZATION_DISABLED=1.`,
+      );
+    }
+    const shouldRunAsync = forceSyncCopilot
+      ? false
+      : (run_in_background === true || selectedAgent.background === true || isCoordinator || forceAsync || assistantForceAsync || (proactiveModule?.isProactiveActive() ?? false)) && !isBackgroundTasksDisabled;
+
     // Resolve agent params for logging and prebuilt system prompts. runAgent
     // resolves the same settings again before the actual query.
     const resolvedAgentModel = getAgentModel(selectedAgent.model, toolUseContext.options.mainLoopModel, isForkPath ? undefined : model, permissionMode);
@@ -483,7 +515,7 @@ export const AgentTool = buildTool({
       color: selectedAgent.color as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
       is_built_in_agent: isBuiltInAgent(selectedAgent),
       is_resume: false,
-      is_async: !forceSyncCopilot && (run_in_background === true || selectedAgent.background === true) && !isBackgroundTasksDisabled,
+      is_async: shouldRunAsync,
       is_fork: isForkPath
     });
 
@@ -556,36 +588,13 @@ export const AgentTool = buildTool({
       isBuiltInAgent: isBuiltInAgent(selectedAgent),
       startTime,
       agentType: selectedAgent.agentType,
-      isAsync: !forceSyncCopilot && (run_in_background === true || selectedAgent.background === true) && !isBackgroundTasksDisabled
+      isAsync: shouldRunAsync
     };
-
     // Use inline env check instead of coordinatorModule to avoid circular
     // dependency issues during test module loading.
-    const isCoordinator = feature('COORDINATOR_MODE') ? isEnvTruthy(process.env.CLAUDE_CODE_COORDINATOR_MODE) : false;
-
-    // Fork subagent experiment: force ALL spawns async for a unified
-    // <task-notification> interaction model (not just fork spawns — all of them).
-    const forceAsync = isForkSubagentEnabled();
-
-    // Assistant mode: force all agents async. Synchronous subagents hold the
-    // main loop's turn open until they complete — the daemon's inputQueue
-    // backs up, and the first overdue cron catch-up on spawn becomes N
-    // serial subagent turns blocking all user input. Same gate as
-    // executeForkedSlashCommand's fire-and-forget path; the
-    // <task-notification> re-entry there is handled by the else branch
-    // below (registerAsyncAgentTask + notifyOnCompletion).
-    const assistantForceAsync = feature('KAIROS') ? appState.kairosEnabled : false;
-    if (shouldSuppressSubagentsInCopilotMode()) {
-      throw new Error(
-        `Sub-agents are disabled in GitHub Copilot mode to conserve Premium Requests. ` +
-        `Run this task directly instead of delegating to Agent('${selectedAgent.agentType}'). ` +
-        `To re-enable sub-agents, set GITHUB_COPILOT_MAX_SUBAGENTS=1, GITHUB_COPILOT_ALLOW_SUBAGENTS=1, ` +
-        `or GITHUB_COPILOT_OPTIMIZATION_DISABLED=1.`,
-      );
-    }
-    const shouldRunAsync = forceSyncCopilot
-      ? false
-      : (run_in_background === true || selectedAgent.background === true || isCoordinator || forceAsync || assistantForceAsync || (proactiveModule?.isProactiveActive() ?? false)) && !isBackgroundTasksDisabled;
+    // (isCoordinator / forceAsync / assistantForceAsync already computed
+    // above; shouldRunAsync is the single source of truth for the launch
+    // decision. Throws above are gone — they're at the top now.)
     if (forceSyncCopilot) {
       const reason = isEnvTruthy(process.env.GITHUB_COPILOT_FORCE_SYNC_SUBAGENTS)
         ? 'GITHUB_COPILOT_FORCE_SYNC_SUBAGENTS=1'
