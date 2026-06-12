@@ -35,7 +35,10 @@ function assistantMessage(text: string): Message {
     message: {
       role: 'assistant',
       content: [{ type: 'text', text }],
-    },
+      // AssistantMessageContent also requires id, model, usage at the type
+      // level; the compact code paths under test don't read them, so cast
+      // through unknown to keep the helper focused on the text content.
+    } as never,
     uuid: randomUUID(),
     timestamp: new Date().toISOString(),
   }
