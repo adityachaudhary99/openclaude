@@ -19,17 +19,15 @@ import {
   type FsOperations,
 } from '../fsOperations.js'
 
-// Clear any stale mocks from other test files (e.g. lspRecommendation.test.ts,
-// officialMarketplaceStartupCheck.test.ts) that mock marketplaceManager.js
-// globally. mock.module with original() forces the real module, overriding
-// any previously registered mock for this module.
-mock.module('./marketplaceManager.js', async (original) => {
-  // When this test runs in isolation (no prior mock from other test files),
-  // `original` is undefined and calling it would throw TypeError.
-  // Only call original() when it's a valid function — otherwise the real
-  // module is already loaded and nothing needs to be restored.
-  if (typeof original !== 'function') return
-  return await original()
+// Force the real marketplaceManager.js module — never a stale mock from a
+// previous test file (e.g. lspRecommendation.test.ts,
+// officialMarketplaceStartupCheck.test.ts). The factory returns undefined
+// so Bun uses the real module, overriding any previously-registered mock.
+// Calling `original()` (the previous factory) would return the stale mock,
+// which breaks env-var-driven paths like getMarketplacesCacheDir() that the
+// tests depend on per-test isolation.
+mock.module('./marketplaceManager.js', () => {
+  return undefined
 })
 
 import { _test } from './marketplaceManager.js'
@@ -301,10 +299,13 @@ describe('loadAndCacheMarketplace — rename failure fallback (EXDEV)', () => {
     // from getCachePathForSource) differs from the final cache path
     // (mymarketplace from marketplace.name.toLowerCase()). This bypasses
     // the samePathCaseInsensitive guard and lets the rename block execute.
+    // Note: the source's own `name` field is unused for url sources
+    // (finalCachePath is derived from the marketplace manifest name), so
+    // the schema does not allow it. Hardcode only the fields the schema
+    // permits.
     const source: MarketplaceSource = {
       source: 'url',
       url: 'https://example.com/marketplace.json',
-      name: 'my-test-marketplace',
     }
 
     const cacheDir = join(tempDir, 'marketplaces')
