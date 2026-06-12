@@ -433,12 +433,17 @@ export async function compactConversation(
     context.setResponseLength?.(() => 0)
     context.onCompactProgress?.({ type: 'compact_start' })
 
-    // 3P default: true — forked-agent path reuses main conversation's prompt cache.
-    // Experiment (Jan 2026) confirmed: false path is 98% cache miss, costs ~0.76% of
-    // fleet cache_creation (~38B tok/day), concentrated in ephemeral envs (CCR/GHA/SDK)
-    // with cold GB cache and 3P providers where GB is disabled. GB gate kept as kill-switch.
-    // Precondition: cache-sharing only works for Anthropic providers. Non-Anthropic
-    // providers don't share prompt cache and would send incompatible Anthropic-only params.
+    // Cache-sharing is enabled only for Anthropic-capable providers when the
+    // tengu_compact_cache_prefix flag is on. Non-Anthropic providers remain
+    // incompatible: they don't share the main conversation's prompt cache, and
+    // the forked-agent path would send Anthropic-only params (betas,
+    // context_management) that 3P providers reject.
+    // Experiment (Jan 2026): the false path is 98% cache miss, costing ~0.76%
+    // of fleet cache_creation (~38B tok/day), concentrated in ephemeral envs
+    // (CCR/GHA/SDK) with cold GB cache and 3P providers where GB is disabled.
+    // The GB flag is kept as a kill-switch.
+    // streamCompactSummary() (below) follows the same gate; see also the
+    // provider-gate tests in src/services/compact/compact.test.ts.
     const promptCacheSharingEnabled =
       isAnthropicProvider() &&
       getFeatureValue_CACHED_MAY_BE_STALE(
@@ -1160,10 +1165,12 @@ async function streamCompactSummary({
   // When prompt cache sharing is enabled, use forked agent to reuse the
   // main conversation's cached prefix (system prompt, tools, context messages).
   // Falls back to regular streaming path on failure.
-  // 3P default: true — see comment at the other tengu_compact_cache_prefix read above.
-  // Precondition: cache-sharing only works for Anthropic providers (firstParty,
-  // bedrock, vertex, foundry). Non-Anthropic providers don't share prompt
-  // cache and would send incompatible Anthropic-only params (betas, context_management).
+  // Same provider-gated cache-sharing behavior as compactConversation() above
+  // (see that block for the full rationale and experiment data): only
+  // Anthropic-capable providers share the prompt cache; non-Anthropic
+  // providers are incompatible and would send Anthropic-only params that
+  // they reject. cacheSharingAvailable = isAnthropicProvider() is the gate
+  // that makes this safe to call from 3P provider paths.
   const cacheSharingAvailable = isAnthropicProvider()
   const promptCacheSharingEnabled =
     cacheSharingAvailable &&
