@@ -145,6 +145,21 @@ test('getMergedBetas returns a non-empty list in GitHub Native Anthropic mode', 
   expect(getMergedBetas(MODEL).length).toBeGreaterThan(0)
 })
 
+test('getMergedBetas returns [] for GitHub with a non-Claude model', async () => {
+  // The risky half of the provider gate: CLAUDE_CODE_USE_GITHUB=1 with a
+  // non-Claude model resolves to the "github" provider, but since the model
+  // is not a Claude model, isGithubNativeAnthropicMode() returns false and
+  // the gate must strip the Anthropic-only beta headers. A future broadening
+  // of isGithubNativeAnthropicMode() (e.g. matching on the wrong substring)
+  // would silently re-introduce these for OpenAI-style models.
+  process.env.CLAUDE_CODE_USE_GITHUB = '1'
+  process.env.ANTHROPIC_BASE_URL = 'https://api.githubcopilot.com'
+  process.env.ANTHROPIC_API_KEY = 'gh-token'
+  process.env.OPENAI_MODEL = 'gpt-4o-mini'
+  const { getMergedBetas } = await importFreshBetas()
+  expect(getMergedBetas('gpt-4o-mini')).toEqual([])
+})
+
 // --- isAnthropicProvider ---
 
 test('isAnthropicProvider is true for firstParty', async () => {
