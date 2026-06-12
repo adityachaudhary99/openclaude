@@ -19,10 +19,30 @@ import {
   type FsOperations,
 } from '../fsOperations.js'
 
-import { _test } from './marketplaceManager.js'
+import { _test } from './marketplaceManager.js?bust=this-test-needs-the-real-module'
 import type { MarketplaceSource } from './schemas.js'
 
 const { loadAndCacheMarketplace } = _test
+
+/**
+ * The static import above uses a query-string suffix to bypass Bun's
+ * mock.module() registry under the bare `./marketplaceManager.js` path.
+ *
+ * Why: in the full test suite, `lspRecommendation.test.ts` (line 32) and
+ * `officialMarketplaceStartupCheck.test.ts` (line 96) both call
+ * `mock.module('./marketplaceManager.js', () => ({...}))` at module
+ * top-level to stub out `addMarketplaceSource`, `getMarketplace`, etc.
+ * Neither stub exports `_test`, so a static import under the bare path
+ * would resolve to a mock without `_test` and every test below would fail
+ * with "Export named '_test' not found" when those test files run first.
+ *
+ * The `?bust=...` suffix makes Bun treat this URL as a distinct module id
+ * and skip the mock.module() registration for the bare path. The same trick
+ * is used in src/utils/betas.test.ts (per-test, with `?ts=${Date.now()}-`)
+ * to force fresh imports that re-evaluate memoized provider detection. We
+ * use a constant suffix here because we only need the import to happen
+ * once at module top-level — no per-test re-evaluation.
+ */
 
 /**
  * Regression test for issue #1500 / PR #1531.
@@ -240,7 +260,13 @@ describe('loadAndCacheMarketplace — rename failure fallback (EXDEV)', () => {
     }))
 
     // Re-import with mocked axios so the module under test picks up the mock.
-    const mod = await import('./marketplaceManager.ts')
+    // The `?bust=` suffix is the same trick the static import at the top of
+    // this file uses — it gives Bun a unique module id that bypasses any
+    // mock.module('./marketplaceManager.js', ...) registration made by
+    // other test files (lspRecommendation, officialMarketplaceStartupCheck).
+    // Without it, when those test files run first their partial mock is
+    // picked up here and `_test` is undefined.
+    const mod = await import('./marketplaceManager.ts?bust=exdev-test-reimport')
     loadAndCacheWithMockedAxios = mod._test.loadAndCacheMarketplace
   })
 
