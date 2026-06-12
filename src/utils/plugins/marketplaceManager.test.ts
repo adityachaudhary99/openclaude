@@ -229,30 +229,63 @@ describe('loadAndCacheMarketplace — rename failure fallback (EXDEV)', () => {
   let originalCacheDir: string | undefined
   let rmSpy: Mock<typeof NodeFsOperations.rm>
   let renameSpy: Mock<typeof NodeFsOperations.rename>
+  let cpSpy: Mock<typeof import('fs/promises').cp>
+  let axiosGetSpy: Mock<typeof import('axios').default.get>
 
   // Mock axios so the 'url' source can fetch without network.
-  // Wrapped inside this describe block so mocks don't leak to other tests
-  // when running the full suite.
+  // Module-level mock.module() is registered once (per suite); the spy and its
+  // implementation are recreated per-test in beforeEach to keep state isolated.
   const fakeMarketplaceJson = {
     name: 'MyMarketplace',
     owner: { name: 'test' },
     plugins: [],
   }
-  const axiosGetSpy = mock(async () => ({
-    data: fakeMarketplaceJson,
-    status: 200,
-    headers: {},
-  }))
 
   beforeAll(async () => {
+    // Capture the real fs/promises.cp so the spy can call through. We do this
+    // by reading the unmocked module once before any mock.module() of
+    // 'fs/promises' is registered, then re-exporting the real cp via a
+    // closure the spy can call. The spy is recreated per-test so call counts
+    // and implementations stay isolated across the suite.
+    const realFsPromises = await import('fs/promises')
+
+    // Spy on cp: passes through to the real implementation so the test
+    // exercises the actual filesystem fallback path. We must use a wrapper
+    // here because `mock()` without a default implementation would replace
+    // cp with a no-op, leaving the temp file uncopied and the test's
+    // filesystem assertions vacuous.
+    const makeCpSpy = () =>
+      mock(
+        (
+          source: Parameters<typeof realFsPromises.cp>[0],
+          dest: Parameters<typeof realFsPromises.cp>[1],
+          options?: Parameters<typeof realFsPromises.cp>[2],
+        ): ReturnType<typeof realFsPromises.cp> =>
+          realFsPromises.cp(source, dest, options),
+      ) as unknown as Mock<typeof import('fs/promises').cp>
+
+    cpSpy = makeCpSpy()
+
+    // Replace fs/promises with a thin wrapper that uses our cp spy but
+    // delegates everything else to the real module. marketplaceManager.ts
+    // imports `cp` from 'fs/promises' (L22), so this mock routes that import
+    // through cpSpy. fsOperations.ts also imports from 'fs/promises' but
+    // only uses rm/rename, which still pass through.
+    mock.module('fs/promises', () => ({
+      ...realFsPromises,
+      cp: cpSpy,
+    }))
+
     mock.module('axios', () => ({
       default: {
-        get: axiosGetSpy,
+        get: (...args: unknown[]) => axiosGetSpy(...args),
       },
       isAxiosError: () => false,
     }))
 
-    // Re-import with mocked axios so the module under test picks up the mock.
+    // Re-import with mocked axios and fs/promises.cp so the module under
+    // test picks up the mocks. Each test gets a fresh cp spy (and fresh
+    // axios spy) via beforeEach.
     const mod = await import('./marketplaceManager.ts')
     loadAndCacheWithMockedAxios = mod._test.loadAndCacheMarketplace
   })
@@ -279,6 +312,21 @@ describe('loadAndCacheMarketplace — rename failure fallback (EXDEV)', () => {
       rm: rmSpy,
       rename: renameSpy,
     })
+
+    // Clear the cp spy that was registered in beforeAll so call counts
+    // stay isolated per test. The spy itself persists across tests
+    // (it is bound to the module-level mock.module('fs/promises')), but
+    // mockClear() resets .mock.calls / .mock.results without losing the
+    // call-through behavior.
+    cpSpy.mockClear()
+
+    // Fresh axios spy per test so call counts and implementations do not
+    // leak across tests in this suite.
+    axiosGetSpy = mock(async () => ({
+      data: fakeMarketplaceJson,
+      status: 200,
+      headers: {},
+    })) as Mock<typeof import('axios').default.get>
   })
 
   afterEach(() => {
@@ -335,6 +383,15 @@ describe('loadAndCacheMarketplace — rename failure fallback (EXDEV)', () => {
     expect(renameSpy).toHaveBeenCalled()
     const renameCalls = renameSpy.mock.calls
     expect(renameCalls.length).toBeGreaterThan(0)
+
+    // The rename-failure fallback must invoke cp with the temp source and
+    // final destination, and must request recursive copy. The first cp call
+    // carries the source -> dest pair; the options are the third argument.
+    expect(cpSpy).toHaveBeenCalled()
+    const firstCpCall = cpSpy.mock.calls[0]
+    expect(firstCpCall[0]).toContain('temp_')
+    expect(firstCpCall[1]).toBe(finalCachePath)
+    expect(firstCpCall[2]).toEqual({ recursive: true })
 
     // The temporary file (temp_<timestamp>.json) MUST be cleaned up — no
     // temp artifacts may remain after the fallback runs. This is the
