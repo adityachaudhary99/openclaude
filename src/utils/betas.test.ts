@@ -31,6 +31,16 @@ const PROVIDER_ENV_KEYS = [
   'VENICE_API_KEY',
   'MIMO_API_KEY',
   'NEARAI_API_KEY',
+  // FIREWORKS_API_KEY was added in PR #1590 / commit `2002e4c` as a
+  // Fireworks-AI-only route trigger (see hasFireworksEnvOnlyProviderIntent
+  // in src/integrations/routeMetadata.ts). If leaked from a prior test,
+  // resolveActiveRouteIdFromEnv returns 'fireworks' which falls into
+  // getAPIProvider's default branch and returns 'firstParty' — the
+  // exact path that was tripping the openai/gemini/bedrock/etc tests in
+  // the smoke run. The dedicated 'fireworks' provider has no branch in
+  // the getAPIProvider switch, so a leaked key is interpreted as the
+  // default anthropic provider.
+  'FIREWORKS_API_KEY',
   'ANTHROPIC_BASE_URL',
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_MODEL',

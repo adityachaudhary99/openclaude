@@ -98,6 +98,10 @@ const SAVED_ENV = {
   VENICE_API_KEY: process.env.VENICE_API_KEY,
   MIMO_API_KEY: process.env.MIMO_API_KEY,
   NEARAI_API_KEY: process.env.NEARAI_API_KEY,
+  // See FIREWORKS_API_KEY comment in src/utils/betas.test.ts: a leaked
+  // key is interpreted as 'firstParty' by getAPIProvider because the
+  // 'fireworks' route has no switch case in that function.
+  FIREWORKS_API_KEY: process.env.FIREWORKS_API_KEY,
   OPENAI_API_KEY: process.env.OPENAI_API_KEY,
   OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
   OPENAI_API_BASE: process.env.OPENAI_API_BASE,
