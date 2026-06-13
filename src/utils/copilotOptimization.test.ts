@@ -18,6 +18,23 @@ import {
 
 let getAPIProviderSpy: ReturnType<typeof spyOn<typeof providers, 'getAPIProvider'>>
 
+// Capture the GITHUB_COPILOT_* env vars at module top-level so the afterEach
+// can restore them. Without this, the precedence test (which sets
+// FORCE_SYNC=1 + ALLOW_SUBAGENTS=1) would leave those env vars in process.env
+// after the file finishes, and any later same-process Bun test (e.g. an
+// `AgentTool.routing.test.ts` reading `isGitHubCopilotMode()` live) would
+// exercise the forced-sync path accidentally. Verified by running
+// `bun test src/utils/copilotOptimization.test.ts ../copilot-env-probe.test.ts`
+// — without this restoration, the probe test sees FORCE_SYNC=1 leaked.
+const ORIGINAL_COPILOT_ENV: Record<string, string | undefined> = {
+  GITHUB_COPILOT_MAX_SUBAGENTS: process.env.GITHUB_COPILOT_MAX_SUBAGENTS,
+  GITHUB_COPILOT_ALLOW_SUBAGENTS: process.env.GITHUB_COPILOT_ALLOW_SUBAGENTS,
+  GITHUB_COPILOT_FORCE_SYNC_SUBAGENTS:
+    process.env.GITHUB_COPILOT_FORCE_SYNC_SUBAGENTS,
+  GITHUB_COPILOT_OPTIMIZATION_DISABLED:
+    process.env.GITHUB_COPILOT_OPTIMIZATION_DISABLED,
+}
+
 function setProvider(provider: string): void {
   getAPIProviderSpy.mockReturnValue(
     provider as ReturnType<typeof providers.getAPIProvider>,
@@ -38,6 +55,17 @@ beforeEach(() => {
 
 afterEach(() => {
   getAPIProviderSpy.mockRestore()
+  // Restore the env vars to their pre-file values. The afterEach ordering
+  // matters: mockRestore() must run first so the provider detection below
+  // (which reads `isGitHubCopilotMode()` via the real module) sees a
+  // consistent post-test env state.
+  for (const [key, value] of Object.entries(ORIGINAL_COPILOT_ENV)) {
+    if (value === undefined) {
+      delete process.env[key]
+    } else {
+      process.env[key] = value
+    }
+  }
 })
 
 describe('isGitHubCopilotMode', () => {

@@ -12,7 +12,8 @@ import { defineGateway } from '../define.js'
  *
  * ## Premium Request Optimization
  *
- * GitHub Copilot tracks "Premium Requests" per month (300 for Copilot Free).
+ * GitHub Copilot tracks "Premium Requests" per billing cycle, with the exact
+ * quota set by the user's Copilot plan (not a property of this runtime).
  * Each HTTP request to api.githubcopilot.com counts toward this quota.
  * OpenClaude's sub-agent architecture can consume multiple Premium Requests
  * per chat interaction (one per agent per turn), rapidly depleting the quota.
