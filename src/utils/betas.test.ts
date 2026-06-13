@@ -106,7 +106,27 @@ const MODEL = 'claude-sonnet-4-5'
 
 test('getMergedBetas returns [] for the openai provider', async () => {
   process.env.CLAUDE_CODE_USE_OPENAI = '1'
-  const { getMergedBetas } = await importFreshBetas()
+  const { getMergedBetas, isAnthropicProvider } = await importFreshBetas()
+  const { getAPIProvider: getAPIProviderFresh } = (await import(
+    `./model/providers.js?ts=${Date.now()}-${Math.random()}`
+  )) as typeof import('./model/providers.js')
+  const { getAPIProvider: getAPIProviderCached } = (await import(
+    './model/providers.js'
+  )) as typeof import('./model/providers.js')
+  // eslint-disable-next-line no-console
+  console.log('DEBUG openai test', {
+    CLAUDE_CODE_USE_OPENAI: process.env.CLAUDE_CODE_USE_OPENAI,
+    OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
+    OPENAI_API_BASE: process.env.OPENAI_API_BASE,
+    FIREWORKS_API_KEY: process.env.FIREWORKS_API_KEY,
+    XAI_API_KEY: process.env.XAI_API_KEY,
+    MINIMAX_API_KEY: process.env.MINIMAX_API_KEY,
+    NEARAI_API_KEY: process.env.NEARAI_API_KEY,
+    provider_fresh: getAPIProviderFresh(),
+    provider_cached: getAPIProviderCached(),
+    provider_inside: isAnthropicProvider(),
+    betas: getMergedBetas(MODEL),
+  })
   expect(getMergedBetas(MODEL)).toEqual([])
 })
 
