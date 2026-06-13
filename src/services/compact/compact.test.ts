@@ -81,50 +81,42 @@ function cacheSafeParams(messages: Message[]) {
 // Env snapshot / restore
 // ---------------------------------------------------------------------------
 
-const SAVED_ENV = {
-  CLAUDE_CODE_USE_OPENAI: process.env.CLAUDE_CODE_USE_OPENAI,
-  CLAUDE_CODE_USE_GEMINI: process.env.CLAUDE_CODE_USE_GEMINI,
-  CLAUDE_CODE_USE_MISTRAL: process.env.CLAUDE_CODE_USE_MISTRAL,
-  CLAUDE_CODE_USE_BEDROCK: process.env.CLAUDE_CODE_USE_BEDROCK,
-  CLAUDE_CODE_USE_VERTEX: process.env.CLAUDE_CODE_USE_VERTEX,
-  CLAUDE_CODE_USE_FOUNDRY: process.env.CLAUDE_CODE_USE_FOUNDRY,
-  CLAUDE_CODE_USE_GITHUB: process.env.CLAUDE_CODE_USE_GITHUB,
-  CLAUDE_CODE_PROVIDER_PROFILE_ENV_APPLIED:
-    process.env.CLAUDE_CODE_PROVIDER_PROFILE_ENV_APPLIED,
-  CLAUDE_CODE_PROVIDER_PROFILE_ENV_APPLIED_ID:
-    process.env.CLAUDE_CODE_PROVIDER_PROFILE_ENV_APPLIED_ID,
-  MINIMAX_API_KEY: process.env.MINIMAX_API_KEY,
-  XAI_API_KEY: process.env.XAI_API_KEY,
-  VENICE_API_KEY: process.env.VENICE_API_KEY,
-  MIMO_API_KEY: process.env.MIMO_API_KEY,
-  NEARAI_API_KEY: process.env.NEARAI_API_KEY,
+// Provider/profile env vars that can steer provider detection. We do NOT keep
+// an "original" snapshot (the snapshot would be polluted by test files that run
+// before this one in the smoke suite). Each test starts with a clean slate and
+// sets only the vars it explicitly needs.
+const PROVIDER_ENV_KEYS = [
+  'CLAUDE_CODE_USE_OPENAI',
+  'CLAUDE_CODE_USE_GEMINI',
+  'CLAUDE_CODE_USE_MISTRAL',
+  'CLAUDE_CODE_USE_BEDROCK',
+  'CLAUDE_CODE_USE_VERTEX',
+  'CLAUDE_CODE_USE_FOUNDRY',
+  'CLAUDE_CODE_USE_GITHUB',
+  'CLAUDE_CODE_PROVIDER_PROFILE_ENV_APPLIED',
+  'CLAUDE_CODE_PROVIDER_PROFILE_ENV_APPLIED_ID',
+  'MINIMAX_API_KEY',
+  'XAI_API_KEY',
+  'VENICE_API_KEY',
+  'MIMO_API_KEY',
+  'NEARAI_API_KEY',
   // See FIREWORKS_API_KEY comment in src/utils/betas.test.ts: a leaked
   // key is interpreted as 'firstParty' by getAPIProvider because the
   // 'fireworks' route has no switch case in that function.
-  FIREWORKS_API_KEY: process.env.FIREWORKS_API_KEY,
-  OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-  OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
-  OPENAI_API_BASE: process.env.OPENAI_API_BASE,
-  OPENAI_MODEL: process.env.OPENAI_MODEL,
-  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-  ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL,
-  ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL,
-  USER_TYPE: process.env.USER_TYPE,
-  CLAUDE_CODE_ENTRYPOINT: process.env.CLAUDE_CODE_ENTRYPOINT,
-}
-
-function restoreEnv(): void {
-  for (const [key, value] of Object.entries(SAVED_ENV)) {
-    if (value === undefined) {
-      delete process.env[key]
-    } else {
-      process.env[key] = value
-    }
-  }
-}
+  'FIREWORKS_API_KEY',
+  'OPENAI_API_KEY',
+  'OPENAI_BASE_URL',
+  'OPENAI_API_BASE',
+  'OPENAI_MODEL',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_MODEL',
+  'USER_TYPE',
+  'CLAUDE_CODE_ENTRYPOINT',
+] as const
 
 function clearProviderEnv(): void {
-  for (const key of Object.keys(SAVED_ENV)) {
+  for (const key of PROVIDER_ENV_KEYS) {
     delete process.env[key]
   }
 }
@@ -513,17 +505,17 @@ beforeEach(async () => {
 afterEach(() => {
   try {
     mock.restore()
-    restoreEnv()
+    clearProviderEnv()
   } finally {
     releaseSharedMutationLock()
   }
 })
 
-// Safety net: restore mocks after all tests in this file finish, so that
-// no mock.module() registration leaks into subsequent test files.
+// Safety net: scrub provider env vars and restore mocks after all tests in
+// this file finish, so nothing leaks into subsequent test files.
 afterAll(() => {
   mock.restore()
-  restoreEnv()
+  clearProviderEnv()
 })
 
 describe('compactConversation provider gate', () => {

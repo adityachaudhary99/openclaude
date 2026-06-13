@@ -14,9 +14,11 @@ import { setSdkBetas } from '../bootstrap/state.js'
 // pin that gate: getMergedBetas() must return [] for non-Anthropic providers
 // and a non-empty list for Anthropic providers (plus GitHub Native Anthropic).
 
-// The list of provider/profile env vars these tests touch. Captured lazily
-// from the live process.env on each clear, so leaks from other test files
-// that set these vars BEFORE this file's module body runs are still cleared.
+// The list of provider/profile env vars these tests touch. We do NOT keep
+// an "original" snapshot of process.env (the snapshot would itself be
+// polluted by test files that run before this one in the smoke suite). Instead
+// we scrub every key before and after each test, and each test sets only the
+// vars it explicitly needs.
 const PROVIDER_ENV_KEYS = [
   'CLAUDE_CODE_USE_OPENAI',
   'CLAUDE_CODE_USE_GEMINI',
@@ -46,6 +48,8 @@ const PROVIDER_ENV_KEYS = [
   'ANTHROPIC_MODEL',
   'ANTHROPIC_BETAS',
   'OPENAI_BASE_URL',
+  // OPENAI_API_BASE is the legacy alias for OPENAI_BASE_URL and is still
+  // consulted by resolveActiveRouteIdFromEnv.
   'OPENAI_API_BASE',
   'OPENAI_MODEL',
   'OPENAI_API_KEY',
@@ -56,21 +60,6 @@ const PROVIDER_ENV_KEYS = [
   'CLAUDE_CODE_PROVIDER_PROFILE_ENV_APPLIED',
   'CLAUDE_CODE_PROVIDER_PROFILE_ENV_APPLIED_ID',
 ] as const
-
-const originalEnv: Record<string, string | undefined> = {}
-for (const key of PROVIDER_ENV_KEYS) {
-  originalEnv[key] = process.env[key]
-}
-
-function restoreEnv(): void {
-  for (const [key, value] of Object.entries(originalEnv)) {
-    if (value === undefined) {
-      delete process.env[key]
-    } else {
-      process.env[key] = value
-    }
-  }
-}
 
 function clearProviderEnv(): void {
   for (const key of PROVIDER_ENV_KEYS) {
@@ -84,12 +73,11 @@ beforeEach(async () => {
 })
 
 afterEach(() => {
-  // Clear the provider env vars again after the test. Other test files
-  // running in the same process may read these between our tests, so
-  // leaving them set would contaminate them. The original values are
-  // not preserved (this is a destructive cleanup by design).
+  // Scrub provider env vars after each test so leaks from one test do not
+  // contaminate the next test in this file or any other test file that shares
+  // the same process.
   try {
-    restoreEnv()
+    clearProviderEnv()
     setSdkBetas(undefined)
   } finally {
     releaseSharedMutationLock()
