@@ -23,19 +23,46 @@ import * as realConfig from '../../utils/config.js'
 // NOT clear it, so the cached bare-path import of providers.js inside betas.ts
 // (which compact.ts transitively imports) resolves to that stub unless we
 // override it. We import the real providers module through a cache-busting URL
-// and re-register it under the bare specifier before any compact import.
-async function importRealProvidersModule() {
-  return (await import(
-    `../../utils/model/providers.js?real=${Date.now()}-${Math.random()}`
-  )) as unknown as typeof import('../../utils/model/providers.js')
-}
+// and re-register it under the bare specifier at module level.
+const _realProvidersModule = await import(
+  `../../utils/model/providers.js?real=${Date.now()}-${Math.random()}`
+)
+mock.module('../../utils/model/providers.js', () => ({
+  getAPIProvider: _realProvidersModule.getAPIProvider,
+  usesAnthropicAccountFlow: _realProvidersModule.usesAnthropicAccountFlow,
+  isGithubNativeAnthropicMode: _realProvidersModule.isGithubNativeAnthropicMode,
+  getAPIProviderForStatsig: _realProvidersModule.getAPIProviderForStatsig,
+  isFirstPartyAnthropicBaseUrl: _realProvidersModule.isFirstPartyAnthropicBaseUrl,
+}))
 
-let realProvidersModule: typeof import('../../utils/model/providers.js')
-
-beforeAll(async () => {
-  realProvidersModule = await importRealProvidersModule()
-  mock.module('../../utils/model/providers.js', () => realProvidersModule)
-})
+// Pre-import the real diskOutput module so we can restore it in afterAll
+// (compact's mock of getTaskOutputPath leaks and breaks BashTool tests).
+const _realDiskOutputModule = await import(
+  `../../utils/task/diskOutput.js?real=${Date.now()}-${Math.random()}`
+)
+// Pre-import real modules that compact stubs but downstream tests need
+// (goal continuation controller, runAgent provider routing).
+const _realMessagesModule = await import(
+  `../../utils/messages.js?real=${Date.now()}-${Math.random()}`
+)
+const _realBootstrapStateModule = await import(
+  `../../bootstrap/state.js?real=${Date.now()}-${Math.random()}`
+)
+const _realSettingsModule = await import(
+  `../../utils/settings/settings.js?real=${Date.now()}-${Math.random()}`
+)
+const _realModelModule = await import(
+  `../../utils/model/model.js?real=${Date.now()}-${Math.random()}`
+)
+const _realAuthModule = await import(
+  `../../utils/auth.js?real=${Date.now()}-${Math.random()}`
+)
+const _realPathModule = await import(
+  `../../utils/path.js?real=${Date.now()}-${Math.random()}`
+)
+const _realConfigModule = await import(
+  `../../utils/config.js?real=${Date.now()}-${Math.random()}`
+)
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -342,7 +369,7 @@ function registerCommonCompactStubs(options: CompactMockOptions = {}) {
 
   // --- Config (DEFENSIVE) ---
   mock.module('../../utils/config.js', () => ({
-    ...realConfig,
+    ..._realConfigModule,
     getMemoryPath: mock(() => '/tmp/memory'),
   }))
 
@@ -384,6 +411,7 @@ function registerCommonCompactStubs(options: CompactMockOptions = {}) {
 
   // --- Path (DEFENSIVE) ---
   mock.module('../../utils/path.js', () => ({
+    ..._realPathModule,
     expandPath: mock((p: string) => p),
   }))
 
@@ -474,11 +502,13 @@ function registerCommonCompactStubs(options: CompactMockOptions = {}) {
 
   // --- Settings (DEFENSIVE) ---
   mock.module('../../utils/settings/settings.js', () => ({
+    ..._realSettingsModule,
     getInitialSettings: mock(() => ({})),
   }))
 
   // --- Model (DEFENSIVE) ---
   mock.module('../../utils/model/model.js', () => ({
+    ..._realModelModule,
     getCanonicalName: mock((m: string) => m),
   }))
 
@@ -534,9 +564,40 @@ afterEach(() => {
 
 // Safety net: scrub provider env vars and restore mocks after all tests in
 // this file finish, so nothing leaks into subsequent test files.
-afterAll(() => {
+afterAll(async () => {
   mock.restore()
   clearProviderEnv()
+  // The compact test registers many mock.module() stubs that persist
+  // process-wide. Restore the real implementations so downstream test files
+  // (goal controller, runAgent routing, BashTool) get correct behaviour.
+  mock.module('../../utils/task/diskOutput.js', () => ({
+    getTaskOutputDir: _realDiskOutputModule.getTaskOutputDir,
+    getTaskOutputPath: _realDiskOutputModule.getTaskOutputPath,
+    initTaskOutput: _realDiskOutputModule.initTaskOutput,
+    initTaskOutputAsSymlink: _realDiskOutputModule.initTaskOutputAsSymlink,
+    appendTaskOutput: _realDiskOutputModule.appendTaskOutput,
+    flushTaskOutput: _realDiskOutputModule.flushTaskOutput,
+    evictTaskOutput: _realDiskOutputModule.evictTaskOutput,
+    getTaskOutputDelta: _realDiskOutputModule.getTaskOutputDelta,
+    getTaskOutput: _realDiskOutputModule.getTaskOutput,
+    getTaskOutputSize: _realDiskOutputModule.getTaskOutputSize,
+    cleanupTaskOutput: _realDiskOutputModule.cleanupTaskOutput,
+    _clearOutputsForTest: _realDiskOutputModule._clearOutputsForTest,
+    _resetTaskOutputDirForTest: _realDiskOutputModule._resetTaskOutputDirForTest,
+    DiskTaskOutput: _realDiskOutputModule.DiskTaskOutput,
+    MAX_TASK_OUTPUT_BYTES: _realDiskOutputModule.MAX_TASK_OUTPUT_BYTES,
+    MAX_TASK_OUTPUT_BYTES_DISPLAY: _realDiskOutputModule.MAX_TASK_OUTPUT_BYTES_DISPLAY,
+  }))
+  mock.module('../../utils/messages.js', () => ({ ..._realMessagesModule }))
+  mock.module('../../bootstrap/state.js', () => ({ ..._realBootstrapStateModule }))
+  mock.module('../../utils/settings/settings.js', () => ({ ..._realSettingsModule }))
+  mock.module('../../utils/model/model.js', () => ({ ..._realModelModule }))
+  mock.module('../../utils/auth.js', () => ({ ..._realAuthModule }))
+  // Clean up the stale /tmp/task symlink left by the mock path.
+  try {
+    const { unlink } = await import('fs/promises')
+    await unlink('/tmp/task').catch(() => {})
+  } catch {}
 })
 
 describe('compactConversation provider gate', () => {

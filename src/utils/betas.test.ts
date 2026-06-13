@@ -89,15 +89,20 @@ afterEach(() => {
 // mock.module() registry is process-global and mock.restore() does NOT clear it,
 // so the cached bare-path import of providers.js inside betas.ts resolves to
 // that stub unless we override it. We import the real providers module through
-// a cache-busting URL and re-register it under the bare specifier so betas.ts
-// (and every other module in this test file) sees the real implementation.
-async function importRealProvidersModule() {
-  return (await import(
-    `./model/providers.js?real=${Date.now()}-${Math.random()}`
-  )) as unknown as typeof import('./model/providers.js')
-}
-
-let realProvidersModule: typeof import('./model/providers.js')
+// a cache-busting URL and re-register it under the bare specifier at MODULE
+// LEVEL (top-level await) so the override is in place before any test code runs.
+// The explicit function references are used instead of spreading the namespace
+// object to avoid potential issues with Bun's mock.module handling.
+const _realProvidersModule = await import(
+  `./model/providers.js?real=${Date.now()}-${Math.random()}`
+)
+mock.module('./model/providers.js', () => ({
+  getAPIProvider: _realProvidersModule.getAPIProvider,
+  usesAnthropicAccountFlow: _realProvidersModule.usesAnthropicAccountFlow,
+  isGithubNativeAnthropicMode: _realProvidersModule.isGithubNativeAnthropicMode,
+  getAPIProviderForStatsig: _realProvidersModule.getAPIProviderForStatsig,
+  isFirstPartyAnthropicBaseUrl: _realProvidersModule.isFirstPartyAnthropicBaseUrl,
+}))
 
 // Fresh import per test resets the memoize caches inside betas.js so the
 // provider detection (read live from process.env) is re-evaluated cleanly.
@@ -112,8 +117,6 @@ async function importFreshBetas() {
 // call is a real fresh import. After pre-warming, the per-test import is
 // sub-second and well under the 5s budget.
 beforeAll(async () => {
-  realProvidersModule = await importRealProvidersModule()
-  mock.module('./model/providers.js', () => realProvidersModule)
   await importFreshBetas()
 })
 
