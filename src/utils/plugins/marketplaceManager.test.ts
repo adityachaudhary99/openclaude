@@ -75,7 +75,7 @@ describe('loadAndCacheMarketplace — Windows cache finalization (#1500)', () =>
   let tempDir: string
   let originalFs: FsOperations
   let originalCacheDir: string | undefined
-  let rmSpy: Mock<typeof NodeFsOperations.rm>
+  let rmCallCount: number
   let renameSpy: Mock<typeof NodeFsOperations.rename>
 
   beforeEach(() => {
@@ -89,16 +89,25 @@ describe('loadAndCacheMarketplace — Windows cache finalization (#1500)', () =>
     // rename are observable. The guard is a pure string comparison, so its
     // effect on control flow is identical on every platform.
     originalFs = getFsImplementation()
-    rmSpy = mock(
-      (path: string, options?: { recursive?: boolean; force?: boolean }) =>
-        NodeFsOperations.rm(path, options),
-    )
+    rmCallCount = 0
+    const rmWrapper = async (
+      path: string,
+      options?: { recursive?: boolean; force?: boolean },
+    ) => {
+      rmCallCount++
+      // eslint-disable-next-line no-console
+      console.log('DEBUG rmWrapper', { rmCallCount, path, options })
+      const result = await NodeFsOperations.rm(path, options)
+      // eslint-disable-next-line no-console
+      console.log('DEBUG rmWrapper result', { rmCallCount, path, exists: existsSync(path) })
+      return result
+    }
     renameSpy = mock((oldPath: string, newPath: string) =>
       NodeFsOperations.rename(oldPath, newPath),
     )
     setFsImplementation({
       ...NodeFsOperations,
-      rm: rmSpy,
+      rm: rmWrapper,
       rename: renameSpy,
     })
   })
@@ -138,10 +147,7 @@ describe('loadAndCacheMarketplace — Windows cache finalization (#1500)', () =>
 
     // fs.rm must never target the final cache path, which on a case-insensitive
     // filesystem is the very directory holding the freshly written manifest.
-    const rmTargets = rmSpy.mock.calls.map(call => call[0])
-    expect(
-      rmTargets.some(p => p.toLowerCase() === finalCachePath.toLowerCase()),
-    ).toBe(false)
+    expect(rmCallCount).toBe(0)
 
     // The cached source survives: the manifest is still on disk and the
     // returned cache path keeps the original (un-renamed) directory.
@@ -178,10 +184,7 @@ describe('loadAndCacheMarketplace — Windows cache finalization (#1500)', () =>
     // The case-insensitive guard must prevent rm + rename
     expect(renameSpy).not.toHaveBeenCalled()
 
-    const rmTargets = rmSpy.mock.calls.map(call => call[0])
-    expect(
-      rmTargets.some(p => p.toLowerCase() === finalCachePath.toLowerCase()),
-    ).toBe(false)
+    expect(rmCallCount).toBe(0)
 
     // Data survives and cache path preserves the original case
     expect(result.marketplace.name).toBe('AgriciDaniel-claude-obsidian')
@@ -213,10 +216,7 @@ describe('loadAndCacheMarketplace — Windows cache finalization (#1500)', () =>
     expect(renameSpy).not.toHaveBeenCalled()
 
     // fs.rm must not target the cache directory at all
-    const rmTargets = rmSpy.mock.calls.map(call => call[0])
-    expect(
-      rmTargets.some(p => p.toLowerCase() === cachePath.toLowerCase()),
-    ).toBe(false)
+    expect(rmCallCount).toBe(0)
 
     expect(result.marketplace.name).toBe('claude-obsidian')
     expect(result.cachePath).toBe(cachePath)
@@ -243,7 +243,7 @@ describe('loadAndCacheMarketplace — rename failure fallback (EXDEV)', () => {
   let tempDir: string
   let originalFs: FsOperations
   let originalCacheDir: string | undefined
-  let rmSpy: Mock<typeof NodeFsOperations.rm>
+  let rmCallCount: number
   let renameSpy: Mock<typeof NodeFsOperations.rename>
 
   // Mock axios so the 'url' source can fetch without network.
@@ -296,16 +296,25 @@ describe('loadAndCacheMarketplace — rename failure fallback (EXDEV)', () => {
     process.env.CLAUDE_CODE_PLUGIN_CACHE_DIR = tempDir
 
     originalFs = getFsImplementation()
-    rmSpy = mock(
-      (path: string, options?: { recursive?: boolean; force?: boolean }) =>
-        NodeFsOperations.rm(path, options),
-    )
+    rmCallCount = 0
+    const rmWrapper = async (
+      path: string,
+      options?: { recursive?: boolean; force?: boolean },
+    ) => {
+      rmCallCount++
+      // eslint-disable-next-line no-console
+      console.log('DEBUG rmWrapper EXDEV', { rmCallCount, path, options })
+      const result = await NodeFsOperations.rm(path, options)
+      // eslint-disable-next-line no-console
+      console.log('DEBUG rmWrapper EXDEV result', { rmCallCount, path, exists: existsSync(path) })
+      return result
+    }
     renameSpy = mock((oldPath: string, newPath: string) =>
       NodeFsOperations.rename(oldPath, newPath),
     )
     setFsImplementation({
       ...NodeFsOperations,
-      rm: rmSpy,
+      rm: rmWrapper,
       rename: renameSpy,
     })
   })
@@ -368,10 +377,17 @@ describe('loadAndCacheMarketplace — rename failure fallback (EXDEV)', () => {
     const renameCalls = renameSpy.mock.calls
     expect(renameCalls.length).toBeGreaterThan(0)
 
+    // The cp+rm fallback must have invoked fs.rm on the temporary file.
+    // eslint-disable-next-line no-console
+    console.log('DEBUG EXDEV', {
+      rmCallCount,
+      renameCallCount: renameSpy.mock.calls.length,
+      afterEntries: readdirSync(cacheDir),
+    })
+    expect(rmCallCount).toBeGreaterThan(0)
+
     // The temporary file (temp_<timestamp>.json) MUST be cleaned up — no
-    // temp artifacts may remain after the fallback runs. This is the
-    // explicit cleanup assertion the previous version of this test
-    // weakened by filtering temp_* entries out of the delta.
+    // temp artifacts may remain after the fallback runs.
     const afterEntries = readdirSync(cacheDir)
     const lingeringTempFiles = afterEntries.filter(e =>
       e.startsWith('temp_'),
