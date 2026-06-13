@@ -253,6 +253,7 @@ describe('loadAndCacheMarketplace — rename failure fallback (EXDEV)', () => {
   let originalCacheDir: string | undefined
   let rmCallCount: number
   let renameSpy: Mock<typeof NodeFsOperations.rename>
+  let cpSpy: Mock<typeof NodeFsOperations.cp>
 
   // Mock axios so the 'url' source can fetch without network.
   // Wrapped inside this describe block so mocks don't leak to other tests
@@ -315,10 +316,18 @@ describe('loadAndCacheMarketplace — rename failure fallback (EXDEV)', () => {
     renameSpy = mock((oldPath: string, newPath: string) =>
       NodeFsOperations.rename(oldPath, newPath),
     )
+    cpSpy = mock(
+      (
+        source: string,
+        destination: string,
+        options?: { recursive?: boolean },
+      ) => NodeFsOperations.cp(source, destination, options),
+    )
     setFsImplementation({
       ...NodeFsOperations,
       rm: rmWrapper,
       rename: renameSpy,
+      cp: cpSpy,
     })
   })
 
@@ -379,6 +388,16 @@ describe('loadAndCacheMarketplace — rename failure fallback (EXDEV)', () => {
     expect(renameSpy).toHaveBeenCalled()
     const renameCalls = renameSpy.mock.calls
     expect(renameCalls.length).toBeGreaterThan(0)
+
+    // The cp+rm fallback must have copied the temp cache to the final path
+    // with { recursive: true }. Asserting on the cp spy (not just the end
+    // state) proves the fallback branch actually executed rather than the
+    // file arriving via some other path.
+    expect(cpSpy).toHaveBeenCalledTimes(1)
+    const [cpSource, cpDest, cpOptions] = cpSpy.mock.calls[0]!
+    expect(cpDest).toBe(finalCachePath)
+    expect(cpSource.startsWith(join(cacheDir, 'temp_'))).toBe(true)
+    expect(cpOptions).toEqual({ recursive: true })
 
     // The cp+rm fallback must have invoked fs.rm on the temporary file.
     expect(rmCallCount).toBeGreaterThan(0)

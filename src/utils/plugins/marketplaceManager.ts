@@ -19,7 +19,7 @@
  */
 
 import axios from 'axios'
-import { cp, writeFile } from 'fs/promises'
+import { writeFile } from 'fs/promises'
 import isEqual from 'lodash-es/isEqual.js'
 import memoize from 'lodash-es/memoize.js'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'path'
@@ -1764,7 +1764,7 @@ async function loadAndCacheMarketplace(
           } catch (renameError) {
             // Rename may fail for cross-device moves (EXDEV). Fall back to
             // copy + delete.
-            await cp(temporaryCachePath, finalCachePath, { recursive: true })
+            await fs.cp(temporaryCachePath, finalCachePath, { recursive: true })
             await fs.rm(temporaryCachePath, { recursive: true, force: true })
           }
           temporaryCachePath = finalCachePath
